@@ -96,7 +96,8 @@ class DashboardCLI(unittest.TestCase):
             sigrok.chmod(0o755)
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 110, 0, 0))
-            process = subprocess.Popen([str(REPO / 'rspro'), 'dashboard'],
+            process = subprocess.Popen([str(REPO / 'rspro'), 'dashboard', '--below', '1.5',
+                '--above', '2', '--unit', 'V', '--mode', 'DC', '--record', str(root / 'discovered.csv')],
                 stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
                 env={**os.environ, 'TERM': 'xterm-256color', 'RSPRO_ROOT': tmp,
                      'RSPRO_USE_SUDO': 'no', 'RSPRO_CONFIG': str(root / 'missing.json'),
@@ -110,14 +111,77 @@ class DashboardCLI(unittest.TestCase):
                             output.extend(os.read(master, 65536))
                         except OSError:
                             break
-                    if b'1.11 V DC' in output and b'2.22 V DC' in output:
+                    if b'1.11 V DC' in output and b'2.22 V DC' in output and b'LOW' in output and b'HIGH' in output:
                         break
                 self.assertIn(b'1.11 V DC', output)
                 self.assertIn(b'2.22 V DC', output)
+                self.assertIn(b'LOW', output)
+                self.assertIn(b'HIGH', output)
                 self.assertNotIn(b'headphones', output)
                 self.assertFalse((root / 'missing.json').exists())
                 os.write(master, b'q')
                 self.assertEqual(process.wait(timeout=5), 0)
+                import csv
+                with (root / 'discovered.csv').open(newline='') as file:
+                    rows = list(csv.DictReader(file))
+                self.assertEqual({row['meter_address'] for row in rows},
+                                 {'AA:BB:CC:DD:EE:01', 'AA:BB:CC:DD:EE:02'})
+            finally:
+                if process.poll() is None:
+                    process.send_signal(signal.SIGTERM)
+                    process.wait(timeout=5)
+                os.close(master)
+                os.close(slave)
+
+    def test_recording_controls_trends_and_limits_in_terminal(self):
+        import csv
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'prefix/lib').mkdir(parents=True)
+            config = root / 'meters.json'
+            config.write_text(json.dumps({'meters': [{'name': 'Meter one', 'address': 'AA:BB:CC:DD:EE:01'}]}))
+            stub = root / 'sigrok-cli'
+            stub.write_text('#!/bin/bash\nwhile true; do\n'
+                            'echo "Primary: 23 V DC"\n'
+                            'echo "Secondary: inf"\nsleep .04\ndone\n')
+            stub.chmod(0o755)
+            csv_path = root / 'startup.csv'
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 120, 0, 0))
+            process = subprocess.Popen([str(REPO / 'rspro'), 'dashboard', '--configured-only',
+                '--config', str(config), '--record', str(csv_path), '--below', '24', '--unit', 'V', '--mode', 'DC'],
+                stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
+                env={**os.environ, 'TERM': 'xterm-256color', 'RSPRO_ROOT': tmp,
+                     'RSPRO_USE_SUDO': 'no', 'RSPRO_SIGROK_BIN': str(stub), 'XDG_DATA_HOME': str(root / 'data')})
+            output = bytearray()
+            try:
+                deadline = time.monotonic() + 4
+                while time.monotonic() < deadline:
+                    if select.select([master], [], [], .1)[0]:
+                        try:
+                            output.extend(os.read(master, 65536))
+                        except OSError:
+                            break
+                    if b'LOW' in output and '▄'.encode() in output and b'REC' in output:
+                        break
+                self.assertIn(b'LOW', output)
+                self.assertIn('▄'.encode(), output)
+                self.assertIn(b'REC', output)
+                os.write(master, b'tr')
+                time.sleep(.3)
+                os.write(master, b'r')
+                time.sleep(.3)
+                os.write(master, b'q')
+                self.assertEqual(process.wait(timeout=5), 0)
+                with csv_path.open(newline='') as file:
+                    rows = list(csv.DictReader(file))
+                self.assertTrue(rows)
+                self.assertEqual({row['channel'] for row in rows}, {'measurement', 'additional'})
+                self.assertTrue(any(row['value'] == '23.0' and row['unit'] == 'V' for row in rows))
+                generated = list((root / 'data/rspro/recordings').glob('*.csv'))
+                self.assertEqual(len(generated), 1)
+                with generated[0].open(newline='') as file:
+                    self.assertTrue(list(csv.DictReader(file)))
             finally:
                 if process.poll() is None:
                     process.send_signal(signal.SIGTERM)

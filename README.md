@@ -99,6 +99,59 @@ The optional default file respects `XDG_CONFIG_HOME`; `RSPRO_CONFIG` can overrid
 
 Python 3.11 or newer with standard `curses`, coreutils `stdbuf`, and `bluetoothctl` from `bluez-utils` are required. No third-party Python packages are needed. Discovery uses your user's BlueZ access. In `RSPRO_USE_SUDO=auto`, startup probes the first already-known meter for up to six seconds and authenticates sudo before curses if necessary. With no known meters it begins discovery and capture as the normal user. If your machine requires privileged capture, use `RSPRO_USE_SUDO=yes rspro dashboard`; authentication happens once before the table opens. `no` forces user-only capture. Collectors never prompt inside curses. If sudo credentials expire during reconnect, exit and restart to authenticate again.
 
+## Recording, trends and alerts
+
+Trend charts appear below each meter automatically. They show up to the last 120 numeric **Measurement** samples, with the observed range and unit. Each chart scales independently. Press **t** to switch between charts and the compact table. Changing unit or mode, a nonnumeric reading, or a reconnect clears that meter's history so unrelated measurements are not combined.
+
+Press **r** to start or stop CSV recording. Keyboard-started recordings go to `~/.local/share/rspro/recordings/` (or `$XDG_DATA_HOME/rspro/recordings/`) with a unique UTC timestamp filename. The footer shows recording status and the number of channel updates written. On exit, the full saved path is printed.
+
+To start recording immediately to a chosen file:
+
+```bash
+rspro dashboard --record ./lab-session.csv
+```
+
+An existing file is never overwritten. Recording includes existing meters and any meters discovered later. Each actual channel update gets its own row:
+
+| CSV column | Meaning |
+| --- | --- |
+| `timestamp_utc` | Time the reading was received, in UTC |
+| `meter_address`, `meter_name` | Meter identity and displayed name |
+| `channel` | `measurement` or `additional` |
+| `reading` | Original measurement text, including its displayed unit |
+| `value` | Finite numeric value normalized to the base SI unit |
+| `unit`, `mode` | Normalized unit and reported mode, such as `V`, `DC` |
+
+For example, `250 mV DC` is recorded as value `0.25`, unit `V`, mode `DC`, while retaining `250 mV DC` in `reading`. `inf` or other nonnumeric readings keep their original text and have a blank numeric cell. Separate channel rows avoid implying that two asynchronously received values were sampled at exactly the same time. Disconnects do not produce fabricated sample rows. Capture and recording are not synchronized between meters.
+
+A bounded writer queue keeps disk writes off the meter collectors. Write failures or a full queue stop recording and display an explicit error; an incomplete recording is not reported as successful. Press r to attempt a new recording after correcting the storage problem.
+
+### Measurement limits
+
+Highlight measurements below 24 V or above 30 V, applying only to DC voltage:
+
+```bash
+rspro dashboard --below 24 --above 30 --unit V --mode DC
+```
+
+These are examples, not configured defaults. Limits apply to the **Measurement** column; readings outside the range show **LOW** or **HIGH** and a highlighted row. Equality is within range. A unit is required; SI prefixes are normalized before comparison. `--mode` is optional. Values in a different unit or specified mode, nonnumeric values, stale values, and values from a previous connection do not trigger fresh alerts. Alerts are visual, without sound.
+
+CLI limits apply to all configured and newly discovered meters. To give one meter its own limits, add an optional `limits` object to its entry:
+
+```json
+{
+  "meters": [
+    {
+      "name": "RS PRO S3 · 4D:D1",
+      "address": "18:7A:93:E4:4D:D1",
+      "limits": {"below": 24, "above": 30, "unit": "V", "mode": "DC"}
+    }
+  ]
+}
+```
+
+Per-meter limits override CLI defaults; `"limits": null` disables them for that meter. Automatic discovery remains enabled. The configuration is loaded at startup, so restart after editing limits.
+
 ## Troubleshooting
 
 - If the local library is missing, run the installer. A system libsigrok alone does not provide this patched setup.
@@ -122,6 +175,6 @@ python3 -m unittest discover -s tests -v
 bash -n rspro install_rspro_cli.sh
 ```
 
-Tests exercise argument validation, output filtering, raw output, error propagation, configuration validation, automatic discovery and adding meters during capture, concurrent collection/retry/cleanup, curses scrolling and resizing through a pseudo-terminal, and isolated CLI-only installation. CLI tests use a stand-in for sigrok, so they do not require Bluetooth hardware. A real installation verifies library loading and the `appa-dmm` driver without connecting to a meter. Hardware capture must be checked separately on the target machine.
+Tests exercise argument validation, output filtering, raw output, error propagation, configuration validation, automatic discovery and adding meters during capture, CSV recording and failure handling, SI prefix normalization, bounded trends, unit-aware alerts, concurrent collection/retry/cleanup, curses scrolling and resizing through a pseudo-terminal, and isolated CLI-only installation. CLI tests use a stand-in for sigrok, so they do not require Bluetooth hardware. A real installation verifies library loading and the `appa-dmm` driver without connecting to a meter. Hardware capture must be checked separately on the target machine.
 
 The wrapper and installer use the repository MIT license. The patch modifies GPL-3.0-or-later libsigrok code and is provided under GPL-3.0-or-later; libsigrok retains its upstream license.

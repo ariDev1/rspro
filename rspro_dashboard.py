@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Concurrent RS PRO / APPA S3 terminal dashboard (standard library only)."""
 import argparse
+from collections import deque
 import curses
 import json
 import os
@@ -14,6 +15,8 @@ import sys
 import threading
 import time
 
+from rspro_features import Limits, RecordingSession, make_sample, parse_reading, sparkline
+
 STALE_AFTER = 5.0
 RETRY_DELAY = 2.0
 IDLE_TIMEOUT = 15.0
@@ -25,15 +28,21 @@ def clean_text(value, limit=160):
 
 
 class MeterState:
-    def __init__(self, name, address):
+    def __init__(self, name, address, limits=None, recording=None):
         self.name = clean_text(name, 80)
         self.address = address
         self.primary = '—'
         self.secondary = '—'
         self.updated = None
+        self.primary_current = False
         self.last_sample = None
         self.status = 'Connecting'
         self.error = ''
+        self.numeric = parse_reading('—')
+        self.history = deque(maxlen=120)
+        self.history_key = ('', '')
+        self.limits = limits
+        self.recording = recording
         self.lock = threading.Lock()
 
     def update_line(self, line, now=None):
@@ -41,18 +50,33 @@ class MeterState:
         for channel in ('Primary', 'Secondary'):
             if line.startswith(channel + ':'):
                 with self.lock:
-                    setattr(self, channel.lower(), clean_text(line.split(':', 1)[1].strip()))
+                    text = clean_text(line.split(':', 1)[1].strip())
+                    setattr(self, channel.lower(), text)
                     if channel == 'Primary':
                         self.updated = now
+                        self.primary_current = True
+                        self.numeric = parse_reading(text)
+                        key = (self.numeric.unit, self.numeric.mode)
+                        if key != self.history_key or self.numeric.value is None:
+                            self.history.clear()
+                        self.history_key = key
+                        if self.numeric.value is not None:
+                            self.history.append(self.numeric.value)
                     self.last_sample = now
                     self.status = 'Connected'
                     self.error = ''
+                if self.recording:
+                    kind = 'measurement' if channel == 'Primary' else 'additional'
+                    self.recording.record(make_sample(self.address, self.name, kind, text))
                 return True
         return False
 
     def set_status(self, status, error=None):
         with self.lock:
             self.status = status
+            if status in ('Connecting', 'Reconnecting', 'Stopped'):
+                self.primary_current = False
+                self.history.clear()
             if error is not None:
                 self.error = clean_text(error)
 
@@ -63,11 +87,19 @@ class MeterState:
             status = self.status
             if status == 'Connected' and age is not None and age >= STALE_AFTER:
                 status = 'Stale'
+            alert, alert_text = False, ''
+            if self.limits:
+                if status == 'Connected' and age is not None and self.primary_current:
+                    alert, alert_text = self.limits.evaluate(self.numeric)
+                else:
+                    alert_text = 'Limits: no fresh measurement'
             return dict(name=self.name, address=self.address, primary=self.primary,
-                        secondary=self.secondary, age=age, status=status, error=self.error)
+                        secondary=self.secondary, age=age, status=status, error=self.error,
+                        history=list(self.history), numeric=self.numeric,
+                        alert=alert, alert_text=alert_text)
 
 
-def load_meters(path):
+def load_meters(path, default_limits=None, recording=None):
     try:
         data = json.loads(Path(path).read_text())
     except FileNotFoundError as exc:
@@ -90,7 +122,19 @@ def load_meters(path):
         if address in seen:
             raise ValueError(f'Duplicate meter address: {address}')
         seen.add(address)
-        meters.append(MeterState(name.strip(), address))
+        limits = default_limits
+        if 'limits' in item:
+            definition = item['limits']
+            if definition is None:
+                limits = None
+            else:
+                if not isinstance(definition, dict):
+                    raise ValueError(f'Meter {index}: limits must be an object or null.')
+                try:
+                    limits = Limits(**definition)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f'Meter {index}: invalid limits: {exc}') from exc
+        meters.append(MeterState(name.strip(), address, limits=limits, recording=recording))
     return meters
 
 
@@ -341,13 +385,24 @@ def draw_line(screen, y, text, attribute=0):
             pass
 
 
-def dashboard(screen, meters, collectors, discovery=None, make_collector=None):
+def dashboard(screen, meters, collectors, discovery=None, make_collector=None,
+              recording=None, default_limits=None):
     try:
         curses.curs_set(0)
     except curses.error:
         pass
     screen.keypad(True)
     screen.timeout(200)
+    alert_attribute = curses.A_BOLD
+    try:
+        if curses.has_colors():
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(1, curses.COLOR_RED, -1)
+            alert_attribute |= curses.color_pair(1)
+    except curses.error:
+        pass
+    show_trends = True
     offset = 0
     started = []
     seen = {meter.address for meter in meters}
@@ -363,17 +418,19 @@ def dashboard(screen, meters, collectors, discovery=None, make_collector=None):
                 found, discovery_status = discovery.snapshot()
                 for address, name in found.items():
                     if address not in seen:
-                        meter = MeterState(f'{name} · {address[-5:]}', address)
+                        meter = MeterState(f'{name} · {address[-5:]}', address,
+                                           limits=default_limits, recording=recording)
                         collector = make_collector(meter)
                         collector.start()
                         started.append(collector)
                         meters.append(meter)
                         seen.add(address)
             height, width = screen.getmaxyx()
-            page = max(1, (height - 5) // 2)
+            row_height = 3 if show_trends else 2
+            page = max(1, (height - 4) // row_height)
             offset = min(max(0, offset), max(0, len(meters) - page))
             screen.erase()
-            draw_line(screen, 0, f'RS PRO lab | {len(meters)} meters | q quit | ↑/↓ scroll | PgUp/PgDn', curses.A_BOLD)
+            draw_line(screen, 0, f'RS PRO lab | {len(meters)} meters | q quit | r record | t trends | ↑/↓ scroll', curses.A_BOLD)
             draw_line(screen, 1, f'{"Meter":24} {"Measurement":20} {"Additional reading":18} {"Status":13} Age', curses.A_BOLD)
             now = time.monotonic()
             for row, meter in enumerate(meters[offset:offset + page]):
@@ -381,24 +438,52 @@ def dashboard(screen, meters, collectors, discovery=None, make_collector=None):
                 age = '—' if snap['age'] is None else f'{snap["age"]:.1f}s'
                 primary, secondary = ('∞' if value == 'inf' else value
                                       for value in (snap['primary'], snap['secondary']))
-                draw_line(screen, 2 + row * 2,
+                y = 2 + row * row_height
+                draw_line(screen, y,
                           f'{snap["name"][:24]:24} {primary[:20]:20} {secondary[:18]:18} '
-                          f'{snap["status"]:13} {age}')
+                          f'{snap["status"]:13} {age}', alert_attribute if snap['alert'] else 0)
                 detail = snap['address']
+                if snap['alert_text']:
+                    detail += ' | ' + snap['alert_text']
                 if snap['error']:
                     detail += ' | ' + snap['error']
-                draw_line(screen, 3 + row * 2, detail, curses.A_DIM)
+                draw_line(screen, y + 1, detail, alert_attribute if snap['alert'] else curses.A_DIM)
+                if show_trends:
+                    history, numeric = snap['history'], snap['numeric']
+                    if history:
+                        units = numeric.unit + (' ' + numeric.mode if numeric.mode else '')
+                        graph = sparkline(history, max(1, width - 45))
+                        trend = f'Trend {graph} | {min(history):g}…{max(history):g} {units}'
+                    else:
+                        trend = 'Trend — waiting for numeric measurements'
+                    draw_line(screen, y + 2, trend, curses.A_DIM)
             if not meters:
                 draw_line(screen, 3, 'Looking for S3 meters… Switch on your meters and enable Bluetooth.')
             footer = f'Meters {offset + 1 if meters else 0}–{min(len(meters), offset + page)} of {len(meters)} | {discovery_status}'
             if width < 70:
                 footer = 'Widen terminal for all columns | q quit'
+            if recording:
+                info = recording.snapshot()
+                if info['error']:
+                    record_status = info['error']
+                elif info['active']:
+                    record_status = f'REC {Path(info["path"]).name} | {info["written"]} channel updates | r stop'
+                elif info['path']:
+                    record_status = f'Saved {Path(info["path"]).name} | {info["written"]} channel updates | r record'
+                else:
+                    record_status = 'Recording off | r start recording'
+                draw_line(screen, height - 2, record_status,
+                          alert_attribute if info['error'] else curses.A_DIM)
             draw_line(screen, height - 1, footer, curses.A_DIM)
             screen.refresh()
             key = screen.getch()
             if key in (ord('q'), ord('Q'), 3):
                 break
-            if key in (curses.KEY_DOWN, ord('j')):
+            if key in (ord('r'), ord('R')) and recording:
+                recording.toggle()
+            elif key in (ord('t'), ord('T')):
+                show_trends = not show_trends
+            elif key in (curses.KEY_DOWN, ord('j')):
                 offset += 1
             elif key in (curses.KEY_UP, ord('k')):
                 offset -= 1
@@ -419,6 +504,8 @@ def dashboard(screen, meters, collectors, discovery=None, make_collector=None):
             discovery.join(timeout=4)
         for collector in started:
             collector.join(timeout=4)
+        if recording:
+            recording.stop()
 
 
 def main(argv=None):
@@ -426,10 +513,20 @@ def main(argv=None):
     default = os.environ.get('RSPRO_CONFIG', str(Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config'))) / 'rspro/meters.json'))
     parser.add_argument('--config', default=None, metavar='PATH', help=f'optional meter names/configuration (default: {default})')
     parser.add_argument('--configured-only', action='store_true', help='disable automatic discovery and use only the configuration')
+    parser.add_argument('--record', metavar='PATH', help='start CSV recording to a new file (r toggles recording in the dashboard)')
+    parser.add_argument('--below', type=float, metavar='VALUE', help='highlight measurements below this limit')
+    parser.add_argument('--above', type=float, metavar='VALUE', help='highlight measurements above this limit')
+    parser.add_argument('--unit', help='required unit for limits, for example V or mV')
+    parser.add_argument('--mode', help='optional measurement mode for limits, for example DC or AC')
     args = parser.parse_args(argv)
+    recording = RecordingSession()
+    result = 0
     try:
+        limits = None
+        if any(value is not None for value in (args.below, args.above, args.unit, args.mode)):
+            limits = Limits(below=args.below, above=args.above, unit=args.unit or '', mode=args.mode)
         config = args.config or default
-        meters = load_meters(config) if args.config or Path(config).exists() else []
+        meters = load_meters(config, default_limits=limits, recording=recording) if args.config or Path(config).exists() else []
         if args.configured_only and not meters:
             raise ValueError('--configured-only requires a meter configuration.')
         if not sys.stdin.isatty() or not sys.stdout.isatty():
@@ -443,9 +540,12 @@ def main(argv=None):
             seen = {meter.address for meter in meters}
             for address, name in cached_meters(bluetooth, env).items():
                 if address not in seen:
-                    meters.append(MeterState(f'{name} · {address[-5:]}', address))
+                    meters.append(MeterState(f'{name} · {address[-5:]}', address,
+                                             limits=limits, recording=recording))
             discovery = Discovery(bluetooth, env)
         privileged = needs_sudo(binary, env, meters[0] if meters else None)
+        if args.record and not recording.start(args.record):
+            raise ValueError(recording.snapshot()['error'])
         def make_collector(meter):
             return Collector(meter, capture_command(binary, stdbuf, env, meter, privileged), env)
         collectors = [make_collector(meter) for meter in meters]
@@ -455,16 +555,25 @@ def main(argv=None):
         try:
             for signum in (signal.SIGTERM, signal.SIGHUP):
                 previous[signum] = signal.signal(signum, interrupt)
-            curses.wrapper(dashboard, meters, collectors, discovery, make_collector)
+            curses.wrapper(dashboard, meters, collectors, discovery, make_collector, recording, limits)
         finally:
             for signum, handler in previous.items():
                 signal.signal(signum, handler)
     except KeyboardInterrupt:
-        return 0
+        pass
     except (ValueError, OSError, curses.error) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
-        return 1
-    return 0
+        result = 1
+    finally:
+        recording.stop()
+    info = recording.snapshot()
+    if info['error']:
+        if result == 0:
+            print(f'ERROR: {info["error"]}', file=sys.stderr)
+        result = 1
+    elif info['path']:
+        print(f'Recording saved to {info["path"]} ({info["written"]} channel updates).')
+    return result
 
 
 if __name__ == '__main__':
