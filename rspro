@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEVICE_MAC="${RSPRO_DEVICE:-18:7A:93:E4:4D:E3}"
+DEVICE_ID="${DEVICE_MAC//:/-}"
+ROOT_DIR="${RSPRO_ROOT:-${HOME}/.local/share/rspro-sigrok}"
+PREFIX="${ROOT_DIR}/prefix"
+LIBDIR="$PREFIX/lib"
+[[ -d "$PREFIX/lib64" ]] && LIBDIR="$PREFIX/lib64"
+
+SIGROK_BIN="${RSPRO_SIGROK_BIN:-sigrok-cli}"
+USE_SUDO="${RSPRO_USE_SUDO:-auto}"
+
+usage() {
+    cat <<'EOF'
+Usage: rspro [--raw] [--help]
+
+Read live measurements from an RS PRO S3 / APPA S3 BLE multimeter.
+
+Options:
+  --raw     Show unfiltered sigrok-cli output.
+  --help    Show this help.
+
+Environment:
+  RSPRO_DEVICE     BLE MAC address (default: 18:7A:93:E4:4D:E3)
+  RSPRO_USE_SUDO   auto, yes, or no (default: auto)
+  RSPRO_ROOT       Local build root (default: ~/.local/share/rspro-sigrok)
+  RSPRO_SIGROK_BIN sigrok-cli executable (default: sigrok-cli)
+EOF
+}
+
+if (( $# > 1 )); then
+    echo "ERROR: Expected at most one option." >&2
+    exit 2
+fi
+
+RAW=0
+case "${1:-}" in
+    "")
+        ;;
+    --raw)
+        RAW=1
+        ;;
+    --help|-h)
+        usage
+        exit 0
+        ;;
+    *)
+        echo "ERROR: Unknown option: $1" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
+
+if [[ ! "$DEVICE_MAC" =~ ^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$ ]]; then
+    echo "ERROR: RSPRO_DEVICE must be a colon-separated BLE MAC address." >&2
+    exit 2
+fi
+case "$USE_SUDO" in
+    auto|yes|no) ;;
+    *) echo "ERROR: RSPRO_USE_SUDO must be auto, yes, or no." >&2; exit 2 ;;
+esac
+
+if [[ ! -d "$LIBDIR" ]]; then
+    echo "ERROR: RS PRO local libsigrok build not found:" >&2
+    echo "  $LIBDIR" >&2
+    exit 1
+fi
+
+if ! command -v "$SIGROK_BIN" >/dev/null 2>&1; then
+    echo "ERROR: sigrok-cli was not found." >&2
+    exit 1
+fi
+
+export LD_LIBRARY_PATH="${LIBDIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+CONN="bt/appa-dmm/${DEVICE_ID}"
+
+run_sigrok() {
+    local -a cmd=(
+        "$SIGROK_BIN"
+        -d "appa-dmm:conn=${CONN}"
+        --continuous
+    )
+
+    if [[ "$USE_SUDO" == "yes" ]]; then
+        sudo env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" "${cmd[@]}"
+    else
+        env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" "${cmd[@]}"
+    fi
+}
+
+if [[ "$USE_SUDO" == "auto" ]]; then
+    # sigrok can exit zero without finding a device; require discovery output.
+    if SCAN_OUTPUT=$(env LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+        "$SIGROK_BIN" -d "appa-dmm:conn=${CONN}" --scan 2>/dev/null) &&
+        [[ "$SCAN_OUTPUT" =~ (^|$'\n')appa-dmm[[:space:]]+- ]]; then
+        USE_SUDO="no"
+    else
+        USE_SUDO="yes"
+    fi
+fi
+
+echo "RS PRO S3"
+echo "Device: $DEVICE_MAC"
+echo "Press Ctrl+C to stop."
+echo
+
+if (( RAW )); then
+    run_sigrok
+else
+    # Keep stderr visible so real connection errors are not hidden.
+    run_sigrok | awk '
+        /^Primary:/ {
+            sub(/^Primary:[[:space:]]*/, "")
+            print
+            fflush()
+        }
+    '
+fi

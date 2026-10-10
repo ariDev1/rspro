@@ -1,0 +1,32 @@
+diff --git a/src/hardware/appa-dmm/protocol_packet.h b/src/hardware/appa-dmm/protocol_packet.h
+index d273644e..8407f9a3 100644
+--- a/src/hardware/appa-dmm/protocol_packet.h
++++ b/src/hardware/appa-dmm/protocol_packet.h
+@@ -643,9 +643,12 @@ static int appadmm_rere_read_information(struct sr_tp_appa_inst *arg_tpai,
+ 	if ((retr = appadmm_enc_read_information(arg_request, &packet_request))
+ 		< SR_OK)
+ 		return retr;
+-	if ((retr = sr_tp_appa_send_receive(arg_tpai, &packet_request,
+-		&packet_response)) < TRUE)
++	retr = sr_tp_appa_send_receive(arg_tpai, &packet_request,
++		&packet_response);
++	if (retr < SR_OK)
+ 		return retr;
++	if (retr == FALSE)
++		return SR_ERR_TIMEOUT;
+ 	if ((retr = appadmm_dec_read_information(&packet_response, arg_response))
+ 		< SR_OK)
+ 		return retr;
+diff --git a/src/tp/appa.c b/src/tp/appa.c
+index 1f311e78..f4c989e9 100644
+--- a/src/tp/appa.c
++++ b/src/tp/appa.c
+@@ -102,7 +102,7 @@
+ #define SR_TP_APPA_START_WORD 0x5555
+ #define SR_TP_APPA_START_BYTE 0x55
+ #define SR_TP_APPA_HEADER_SIZE 4
+-#define SR_TP_APPA_RECEIVE_TIMEOUT 500
++#define SR_TP_APPA_RECEIVE_TIMEOUT 1000
+ #define SR_TP_APPA_PACKET_TIMING 50
+ 
+ #define SR_TP_APPA_MAX_PAYLOAD_SIZE \
