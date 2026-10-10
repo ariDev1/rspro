@@ -363,7 +363,7 @@ def dashboard(screen, meters, collectors, discovery=None, make_collector=None):
                 found, discovery_status = discovery.snapshot()
                 for address, name in found.items():
                     if address not in seen:
-                        meter = MeterState(f'{name} {address[-5:]}', address)
+                        meter = MeterState(f'{name} · {address[-5:]}', address)
                         collector = make_collector(meter)
                         collector.start()
                         started.append(collector)
@@ -374,14 +374,15 @@ def dashboard(screen, meters, collectors, discovery=None, make_collector=None):
             offset = min(max(0, offset), max(0, len(meters) - page))
             screen.erase()
             draw_line(screen, 0, f'RS PRO lab | {len(meters)} meters | q quit | ↑/↓ scroll | PgUp/PgDn', curses.A_BOLD)
-            draw_line(screen, 1, 'Meter                    Primary              Secondary        Status          Age', curses.A_BOLD)
+            draw_line(screen, 1, f'{"Meter":24} {"Measurement":20} {"Additional reading":18} {"Status":13} Age', curses.A_BOLD)
             now = time.monotonic()
             for row, meter in enumerate(meters[offset:offset + page]):
                 snap = meter.snapshot(now)
                 age = '—' if snap['age'] is None else f'{snap["age"]:.1f}s'
-                primary, secondary = snap['primary'], snap['secondary']
+                primary, secondary = ('∞' if value == 'inf' else value
+                                      for value in (snap['primary'], snap['secondary']))
                 draw_line(screen, 2 + row * 2,
-                          f'{snap["name"][:24]:24} {primary[:20]:20} {secondary[:16]:16} '
+                          f'{snap["name"][:24]:24} {primary[:20]:20} {secondary[:18]:18} '
                           f'{snap["status"]:13} {age}')
                 detail = snap['address']
                 if snap['error']:
@@ -421,7 +422,7 @@ def dashboard(screen, meters, collectors, discovery=None, make_collector=None):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Live terminal dashboard for all configured RS PRO S3 meters.')
+    parser = argparse.ArgumentParser(description='Automatically discover S3 meters and display their live measurements.')
     default = os.environ.get('RSPRO_CONFIG', str(Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config'))) / 'rspro/meters.json'))
     parser.add_argument('--config', default=None, metavar='PATH', help=f'optional meter names/configuration (default: {default})')
     parser.add_argument('--configured-only', action='store_true', help='disable automatic discovery and use only the configuration')
@@ -442,7 +443,7 @@ def main(argv=None):
             seen = {meter.address for meter in meters}
             for address, name in cached_meters(bluetooth, env).items():
                 if address not in seen:
-                    meters.append(MeterState(f'{name} {address[-5:]}', address))
+                    meters.append(MeterState(f'{name} · {address[-5:]}', address))
             discovery = Discovery(bluetooth, env)
         privileged = needs_sudo(binary, env, meters[0] if meters else None)
         def make_collector(meter):

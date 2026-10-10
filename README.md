@@ -62,7 +62,7 @@ Switch on your S3 meters, enable their Bluetooth function, and start:
 rspro dashboard
 ```
 
-**No address configuration is required.** The dashboard uses BlueZ's known S3 devices and automatically scans for `RS PRO S3` and `APPA S3` advertisements. It repeats eight-second discovery rounds with two-second pauses, and adds meters as soon as their advertisement arrives. You can switch on more meters while the dashboard is running; they appear and begin capture without a restart. Other Bluetooth devices are ignored. Each automatically added meter gets its model name and address suffix as a label.
+**No address configuration is required.** The dashboard uses BlueZ's known S3 devices and automatically scans for `RS PRO S3` and `APPA S3` advertisements. It repeats eight-second discovery rounds with two-second pauses, and adds meters as soon as their advertisement arrives. You can switch on more meters while the dashboard is running; they appear and begin capture without a restart. Other Bluetooth devices are ignored. Each automatically added meter gets its advertised name and address suffix as a label, for example `RS PRO S3 · 4D:E3`.
 
 Update an existing installation without rebuilding the library:
 
@@ -70,7 +70,7 @@ Update an existing installation without rebuilding the library:
 ./install_rspro_cli.sh --cli-only
 ```
 
-Each meter has a stable row showing primary and secondary readings, connection state, and the age of its primary reading. Its address and latest diagnostic appear below. Disconnected meters remain visible with their last readings and reconnect independently. Primary readings older than five seconds are marked stale while capture is active. Capture retries every two seconds after exiting and restarts after fifteen seconds without any measurements.
+Each meter has a stable row showing **Measurement** (the main meter reading), **Additional reading** (the auxiliary display value), connection state, and the age of the measurement. An `inf` reading is displayed as `∞`. Its address and latest diagnostic appear below. Disconnected meters remain visible with their last readings and reconnect independently. Primary readings older than five seconds are marked stale while capture is active. Capture retries every two seconds after exiting and restarts after fifteen seconds without any measurements.
 
 Use ↑/↓ (or j/k), Page Up/Down, Home/End to scroll, and q or Ctrl+C to exit. Widen the terminal to see all columns. The footer shows discovery activity or errors. There is no configured meter-count limit, but simultaneous BLE capacity depends on the adapter and meters. Collection is independent, not synchronized sampling. Disconnect phone apps that are using these meters.
 
