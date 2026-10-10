@@ -99,6 +99,29 @@ while True:
                     with self.assertRaises(ProcessLookupError):
                         os.kill(int(pid), 0)
 
+    def test_capture_keeps_stdin_open_so_sigrok_does_not_stop_on_eof(self):
+        from rspro_dashboard import Collector, MeterState
+        # sigrok-cli watches stdin and stops acquisition when it reaches EOF.
+        code = """import select, sys, time
+if select.select([sys.stdin], [], [], .1)[0] and not sys.stdin.readline():
+    sys.exit(0)
+print('Primary: 27.57 V DC', flush=True)
+while True: time.sleep(1)
+"""
+        state = MeterState('Supply', 'AA:BB:CC:DD:EE:01')
+        collector = Collector(state, [sys.executable, '-c', code], os.environ.copy(),
+                              retry_delay=.02)
+        collector.start()
+        try:
+            deadline = time.monotonic() + 1
+            while state.snapshot()['primary'] == '—' and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertEqual(state.snapshot()['primary'], '27.57 V DC')
+        finally:
+            collector.stop()
+            collector.join(timeout=3)
+        self.assertFalse(collector.is_alive())
+
     def test_capture_retains_session_for_sudo_timestamp(self):
         from rspro_dashboard import Collector, MeterState
         with tempfile.TemporaryDirectory() as tmp:

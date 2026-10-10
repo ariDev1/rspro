@@ -136,7 +136,9 @@ class Collector(threading.Thread):
         self.state.set_status('Stopped')
 
     def capture(self):
-        process = subprocess.Popen(self.command, env=self.env, stdin=subprocess.DEVNULL,
+        # sigrok treats EOF on stdin as a stop request. Keep a private pipe open
+        # so only the dashboard reads terminal keys and captures keep running.
+        process = subprocess.Popen(self.command, env=self.env, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    process_group=0)
         last_sample = time.monotonic()
@@ -177,6 +179,7 @@ class Collector(threading.Thread):
                         break
         finally:
             stop_process(process)
+            process.stdin.close()
             process.stdout.close()
             process.stderr.close()
 

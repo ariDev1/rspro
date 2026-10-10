@@ -99,6 +99,7 @@ Python 3.11 or newer with its standard `curses` module and coreutils `stdbuf` ar
 - If the local library is missing, run the installer. A system libsigrok alone does not provide this patched setup.
 - If discovery fails, check the address, meter Bluetooth mode, adapter state, and whether another client is connected. Auto sudo fallback can also occur for these failures; it does not prove a permissions problem. Use `RSPRO_USE_SUDO=no` to diagnose without escalation, or `yes` where raw Bluetooth access requires root.
 - If the meter is detected as `APPA N/A` or capture immediately stops, see the [bug investigation](docs/s3-timing-bug.md).
+- If the original single-meter command works but an older dashboard repeatedly reconnects without readings, update with `./install_rspro_cli.sh --cli-only`. The [dashboard stdin fix](docs/dashboard-stdin-bug.md) keeps capture input open so sigrok does not stop on EOF.
 - For verbose diagnostics, use the installed library explicitly:
 
   ```bash
