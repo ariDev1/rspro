@@ -375,15 +375,85 @@ def capture_command(binary, stdbuf, env, meter, privileged):
     return command
 
 
-def draw_line(screen, y, text, attribute=0):
+def draw_line(screen, y, text, attribute=0, x=0):
     height, width = screen.getmaxyx()
-    if 0 <= y < height and width > 1:
+    if 0 <= y < height and 0 <= x < width - 1:
         try:
-            screen.addnstr(y, 0, clean_text(text, 2000), width - 1, attribute)
+            screen.addnstr(y, x, clean_text(text, 2000), width - x - 1, attribute)
         except curses.error:
             # Wide characters and resize events can reach the terminal edge.
             pass
 
+
+
+class RecordingPicker:
+    def __init__(self, meters):
+        self.cursor = 1 if meters else 0
+        self.selected = set()
+        self.all_meters = False
+
+    def handle(self, key, meters):
+        self.cursor = max(0, min(self.cursor, len(meters)))
+        if key in (27, ord('q'), ord('Q')):
+            return 'cancel', None
+        if key in (curses.KEY_DOWN, ord('j')):
+            self.cursor = min(len(meters), self.cursor + 1)
+        elif key in (curses.KEY_UP, ord('k')):
+            self.cursor = max(0, self.cursor - 1)
+        elif key == curses.KEY_HOME:
+            self.cursor = 0
+        elif key == curses.KEY_END:
+            self.cursor = len(meters)
+        elif key == curses.KEY_NPAGE:
+            self.cursor = min(len(meters), self.cursor + 5)
+        elif key == curses.KEY_PPAGE:
+            self.cursor = max(0, self.cursor - 5)
+        elif key == ord('a'):
+            self.all_meters = True
+            self.selected.clear()
+            self.cursor = 0
+        elif key == ord(' '):
+            if self.cursor == 0:
+                self.all_meters = not self.all_meters
+                self.selected.clear()
+            else:
+                address = meters[self.cursor - 1].address
+                if self.all_meters:
+                    self.selected = {m.address for m in meters}
+                    self.all_meters = False
+                if address in self.selected:
+                    self.selected.remove(address)
+                else:
+                    self.selected.add(address)
+        elif key in (10, 13, curses.KEY_ENTER):
+            if self.all_meters:
+                return 'start', None
+            if self.selected:
+                return 'start', set(self.selected)
+            return 'start', None if self.cursor == 0 else {meters[self.cursor - 1].address}
+        return None, None
+
+    def draw(self, screen, meters):
+        screen.erase()
+        height, _ = screen.getmaxyx()
+        self.cursor = min(self.cursor, len(meters))
+        draw_line(screen, 0, 'Choose meters to record', curses.A_BOLD)
+        draw_line(screen, 1, '↑/↓ choose | Enter record | Space select several | a all | Esc cancel')
+        count = max(1, height - 4)
+        offset = max(0, min(self.cursor - count + 1, len(meters) + 1 - count))
+        entries = ['All meters (including meters discovered later)'] + [f'{m.name}  ({m.address})' for m in meters]
+        for row, index in enumerate(range(offset, min(len(entries), offset + count))):
+            checked = self.all_meters if index == 0 else self.all_meters or meters[index - 1].address in self.selected
+            marker = '[x]' if checked else '[ ]'
+            draw_line(screen, row + 2, f'{marker} {entries[index]}', curses.A_REVERSE if index == self.cursor else 0)
+        if self.all_meters:
+            hint = 'Enter: record all meters'
+        elif self.selected:
+            hint = f'Enter: record {len(self.selected)} selected meters'
+        else:
+            hint = 'Enter: record highlighted meter (or All)'
+        draw_line(screen, height - 1, hint, curses.A_DIM)
+        screen.refresh()
 
 def dashboard(screen, meters, collectors, discovery=None, make_collector=None,
               recording=None, default_limits=None):
@@ -393,16 +463,22 @@ def dashboard(screen, meters, collectors, discovery=None, make_collector=None,
         pass
     screen.keypad(True)
     screen.timeout(200)
+    curses.set_escdelay(100)
     alert_attribute = curses.A_BOLD
+    trend_attribute = 0
     try:
         if curses.has_colors():
             curses.start_color()
             curses.use_default_colors()
             curses.init_pair(1, curses.COLOR_RED, -1)
             alert_attribute |= curses.color_pair(1)
+            # Use the terminal theme's yellow accent and default background.
+            curses.init_pair(2, curses.COLOR_YELLOW, -1)
+            trend_attribute = curses.color_pair(2)
     except curses.error:
         pass
     show_trends = True
+    picker = None
     offset = 0
     started = []
     seen = {meter.address for meter in meters}
@@ -425,6 +501,15 @@ def dashboard(screen, meters, collectors, discovery=None, make_collector=None,
                         started.append(collector)
                         meters.append(meter)
                         seen.add(address)
+            if picker is not None:
+                picker.draw(screen, meters)
+                action, addresses = picker.handle(screen.getch(), meters)
+                if action == 'start':
+                    recording.start(addresses=addresses)
+                    picker = None
+                elif action == 'cancel':
+                    picker = None
+                continue
             height, width = screen.getmaxyx()
             row_height = 3 if show_trends else 2
             page = max(1, (height - 4) // row_height)
@@ -457,6 +542,8 @@ def dashboard(screen, meters, collectors, discovery=None, make_collector=None,
                     else:
                         trend = 'Trend — waiting for numeric measurements'
                     draw_line(screen, y + 2, trend, curses.A_DIM)
+                    if history:
+                        draw_line(screen, y + 2, graph, trend_attribute, x=6)
             if not meters:
                 draw_line(screen, 3, 'Looking for S3 meters… Switch on your meters and enable Bluetooth.')
             footer = f'Meters {offset + 1 if meters else 0}–{min(len(meters), offset + page)} of {len(meters)} | {discovery_status}'
@@ -467,7 +554,8 @@ def dashboard(screen, meters, collectors, discovery=None, make_collector=None,
                 if info['error']:
                     record_status = info['error']
                 elif info['active']:
-                    record_status = f'REC {Path(info["path"]).name} | {info["written"]} channel updates | r stop'
+                    scope = 'all meters' if info['addresses'] is None else f'{len(info["addresses"])} selected'
+                    record_status = f'REC {scope} | {Path(info["path"]).name} | {info["written"]} updates | r stop'
                 elif info['path']:
                     record_status = f'Saved {Path(info["path"]).name} | {info["written"]} channel updates | r record'
                 else:
@@ -480,7 +568,10 @@ def dashboard(screen, meters, collectors, discovery=None, make_collector=None,
             if key in (ord('q'), ord('Q'), 3):
                 break
             if key in (ord('r'), ord('R')) and recording:
-                recording.toggle()
+                if recording.snapshot()['active']:
+                    recording.stop()
+                else:
+                    picker = RecordingPicker(meters)
             elif key in (ord('t'), ord('T')):
                 show_trends = not show_trends
             elif key in (curses.KEY_DOWN, ord('j')):

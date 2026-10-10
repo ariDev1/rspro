@@ -169,7 +169,7 @@ class DashboardCLI(unittest.TestCase):
                 self.assertIn(b'REC', output)
                 os.write(master, b'tr')
                 time.sleep(.3)
-                os.write(master, b'r')
+                os.write(master, b'r\r')
                 time.sleep(.3)
                 os.write(master, b'q')
                 self.assertEqual(process.wait(timeout=5), 0)
@@ -182,6 +182,58 @@ class DashboardCLI(unittest.TestCase):
                 self.assertEqual(len(generated), 1)
                 with generated[0].open(newline='') as file:
                     self.assertTrue(list(csv.DictReader(file)))
+            finally:
+                if process.poll() is None:
+                    process.send_signal(signal.SIGTERM)
+                    process.wait(timeout=5)
+                os.close(master)
+                os.close(slave)
+
+    def test_r_asks_for_meter_and_cancel_does_not_create_recording(self):
+        import csv
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'prefix/lib').mkdir(parents=True)
+            config = root / 'meters.json'
+            config.write_text(json.dumps({'meters': [
+                {'name': 'First meter', 'address': 'AA:BB:CC:DD:EE:01'},
+                {'name': 'Second meter', 'address': 'AA:BB:CC:DD:EE:02'}]}))
+            stub = root / 'sigrok-cli'
+            stub.write_text('#!/bin/bash\nwhile true; do echo "Primary: 23 V DC"; sleep .03; done\n')
+            stub.chmod(0o755)
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 14, 110, 0, 0))
+            process = subprocess.Popen([str(REPO / 'rspro'), 'dashboard', '--configured-only', '--config', str(config)],
+                stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
+                env={**os.environ, 'TERM': 'xterm-256color', 'RSPRO_ROOT': tmp,
+                     'RSPRO_USE_SUDO': 'no', 'RSPRO_SIGROK_BIN': str(stub), 'XDG_DATA_HOME': str(root / 'data')})
+            output = bytearray()
+            def wait_for(token):
+                deadline = time.monotonic() + 3
+                while token not in output and time.monotonic() < deadline:
+                    if select.select([master], [], [], .1)[0]:
+                        try:
+                            output.extend(os.read(master, 65536))
+                        except OSError:
+                            break
+                self.assertIn(token, output)
+            try:
+                wait_for(b'Second meter')
+                os.write(master, b'r')
+                wait_for(b'Choose meters to record')
+                os.write(master, b'\x1b')
+                time.sleep(.3)
+                self.assertFalse(list((root / 'data/rspro/recordings').glob('*.csv')))
+                os.write(master, b'rj\r')
+                time.sleep(.5)
+                os.write(master, b'q')
+                self.assertEqual(process.wait(timeout=5), 0)
+                files = list((root / 'data/rspro/recordings').glob('*.csv'))
+                self.assertEqual(len(files), 1)
+                with files[0].open(newline='') as file:
+                    rows = list(csv.DictReader(file))
+                self.assertTrue(rows)
+                self.assertEqual({r['meter_address'] for r in rows}, {'AA:BB:CC:DD:EE:02'})
             finally:
                 if process.poll() is None:
                     process.send_signal(signal.SIGTERM)

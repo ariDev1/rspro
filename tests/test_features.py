@@ -219,6 +219,44 @@ class MeterIntegration(unittest.TestCase):
             state.update_line('Primary: 12 V', 100)
             self.assertIn('HIGH', state.snapshot(101)['alert_text'])
 
+class MeterSelection(unittest.TestCase):
+    def test_recording_filters_selected_meter_but_all_mode_includes_new_meters(self):
+        from rspro_features import RecordingSession, make_sample
+        with tempfile.TemporaryDirectory() as tmp:
+            session = RecordingSession(tmp)
+            selected = Path(tmp) / 'selected.csv'
+            self.assertTrue(session.start(selected, addresses={'AA:BB:CC:DD:EE:02'}))
+            for address in ['AA:BB:CC:DD:EE:01', 'AA:BB:CC:DD:EE:02', 'AA:BB:CC:DD:EE:03']:
+                session.record(make_sample(address, 'Meter', 'measurement', '23 V DC'))
+            session.stop()
+            with selected.open(newline='') as file:
+                self.assertEqual([r['meter_address'] for r in csv.DictReader(file)], ['AA:BB:CC:DD:EE:02'])
+            all_path = Path(tmp) / 'all.csv'
+            self.assertTrue(session.start(all_path))
+            session.record(make_sample('AA:BB:CC:DD:EE:03', 'New meter', 'measurement', '24 V DC'))
+            session.stop()
+            with all_path.open(newline='') as file:
+                self.assertEqual([r['meter_address'] for r in csv.DictReader(file)], ['AA:BB:CC:DD:EE:03'])
+
+    def test_picker_selects_one_multiple_all_and_can_cancel(self):
+        import curses
+        from rspro_dashboard import RecordingPicker, MeterState
+        meters = [MeterState('First', 'AA:BB:CC:DD:EE:01'), MeterState('Second', 'AA:BB:CC:DD:EE:02')]
+        picker = RecordingPicker(meters)
+        picker.handle(ord('j'), meters)
+        self.assertEqual(picker.handle(10, meters), ('start', {'AA:BB:CC:DD:EE:02'}))
+        picker = RecordingPicker(meters)
+        picker.handle(ord(' '), meters)
+        picker.handle(ord('j'), meters)
+        picker.handle(ord(' '), meters)
+        self.assertEqual(picker.handle(10, meters), ('start', {m.address for m in meters}))
+        picker = RecordingPicker(meters)
+        picker.handle(ord('a'), meters)
+        self.assertEqual(picker.handle(10, meters), ('start', None))
+        self.assertEqual(picker.handle(27, meters), ('cancel', None))
+        picker = RecordingPicker([])
+        self.assertEqual(picker.handle(10, []), ('start', None))
+
 
 if __name__ == '__main__':
     unittest.main()

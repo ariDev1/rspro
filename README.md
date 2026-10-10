@@ -101,9 +101,9 @@ Python 3.11 or newer with standard `curses`, coreutils `stdbuf`, and `bluetoothc
 
 ## Recording, trends and alerts
 
-Trend charts appear below each meter automatically. They show up to the last 120 numeric **Measurement** samples, with the observed range and unit. Each chart scales independently. Press **t** to switch between charts and the compact table. Changing unit or mode, a nonnumeric reading, or a reconnect clears that meter's history so unrelated measurements are not combined.
+Trend charts appear below each meter automatically. They show up to the last 120 numeric **Measurement** samples, with the observed range and unit. Each chart scales independently. Trend bars use the terminal theme’s yellow color and default background. Press **t** to switch between charts and the compact table. Changing unit or mode, a nonnumeric reading, or a reconnect clears that meter's history so unrelated measurements are not combined.
 
-Press **r** to start or stop CSV recording. Keyboard-started recordings go to `~/.local/share/rspro/recordings/` (or `$XDG_DATA_HOME/rspro/recordings/`) with a unique UTC timestamp filename. The footer shows recording status and the number of channel updates written. On exit, the full saved path is printed.
+Press **r** to choose which meters to record. Use **↑/↓** to highlight a meter and **Enter** to start recording it. For multiple meters, use **Space** to check each one, then Enter. Choose **All meters** (or press **a**, then Enter) to include every meter, including meters discovered later. **Esc** cancels without creating a file. Press **r** during recording to stop it. Meter readings and automatic discovery continue while the picker is open. Keyboard-started recordings go to `~/.local/share/rspro/recordings/` (or `$XDG_DATA_HOME/rspro/recordings/`) with a unique UTC timestamp filename. The footer shows recording status and the number of channel updates written. On exit, the full saved path is printed.
 
 To start recording immediately to a chosen file:
 
@@ -111,7 +111,7 @@ To start recording immediately to a chosen file:
 rspro dashboard --record ./lab-session.csv
 ```
 
-An existing file is never overwritten. Recording includes existing meters and any meters discovered later. Each actual channel update gets its own row:
+An existing file is never overwritten. The `--record` option starts recording all existing and newly discovered meters immediately. Keyboard-started recordings include only the meters you selected, unless you chose **All meters**. Unselected meters remain visible and keep updating. Each actual channel update gets its own row:
 
 | CSV column | Meaning |
 | --- | --- |

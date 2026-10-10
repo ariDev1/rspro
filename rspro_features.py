@@ -186,21 +186,22 @@ class CSVRecorder(threading.Thread):
 
 
 class RecordingSession:
-    """Recording toggle shared by existing and newly discovered meters."""
+    """Recording session with optional per-meter filtering."""
     def __init__(self, directory=None):
         data = Path(os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local/share')))
         self.directory = Path(directory) if directory else data / 'rspro/recordings'
         self.recorder = None
+        self.addresses = None
         self.lock = threading.Lock()
         self.last = dict(active=False, error='', path='', written=0)
 
     def record(self, sample):
         with self.lock:
-            if self.recorder:
+            if self.recorder and (self.addresses is None or sample['meter_address'].upper() in self.addresses):
                 return self.recorder.record(sample)
         return False
 
-    def start(self, path=None):
+    def start(self, path=None, addresses=None):
         self.stop()
         if path is None:
             path = self.directory / datetime.now(timezone.utc).strftime('rspro-%Y%m%dT%H%M%S.%fZ.csv')
@@ -211,6 +212,7 @@ class RecordingSession:
                 self.last = dict(active=False, error=f'Recording error: {exc}', path=str(path), written=0)
             return False
         with self.lock:
+            self.addresses = None if addresses is None else frozenset(address.upper() for address in addresses)
             self.recorder = recorder
         return True
 
@@ -224,7 +226,9 @@ class RecordingSession:
 
     def snapshot(self):
         with self.lock:
-            return self.recorder.snapshot() if self.recorder else dict(self.last)
+            info = self.recorder.snapshot() if self.recorder else dict(self.last)
+            info['addresses'] = None if self.addresses is None else sorted(self.addresses)
+            return info
 
     def toggle(self):
         if self.snapshot()['active']:
