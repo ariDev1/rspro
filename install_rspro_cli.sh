@@ -45,7 +45,10 @@ python3 -c 'import curses, sys; sys.exit(0 if sys.version_info >= (3, 11) else "
 
 install_cli() {
     mkdir -p "$DEST_DIR"
+    install -m 0644 "$SRC_DIR/VERSION" "$DEST_DIR/rspro-version.txt"
     install -m 0755 "$SRC_DIR/rspro" "$DEST_DIR/rspro"
+    install -m 0644 "$SRC_DIR/rspro_capture.py" "$DEST_DIR/rspro_capture.py"
+    install -m 0644 "$SRC_DIR/rspro_discovery.py" "$DEST_DIR/rspro_discovery.py"
     install -m 0644 "$SRC_DIR/rspro_features.py" "$DEST_DIR/rspro_features.py"
     install -m 0644 "$SRC_DIR/rspro_dashboard.py" "$DEST_DIR/rspro_dashboard.py"
     "$DEST_DIR/rspro" --help >/dev/null

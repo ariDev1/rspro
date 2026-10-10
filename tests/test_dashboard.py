@@ -99,6 +99,36 @@ while True:
                     with self.assertRaises(ProcessLookupError):
                         os.kill(int(pid), 0)
 
+    def test_startup_has_its_own_budget_before_stream_idle_timeout(self):
+        from rspro_dashboard import Collector, MeterState
+        state = MeterState('Slow', 'AA:BB:CC:DD:EE:01')
+        code = """import time
+ time.sleep(.25)
+ while True:
+     print('Primary: 1 V DC', flush=True)
+     time.sleep(.03)
+""".replace('\n ', '\n')
+        collector = Collector(state, [sys.executable, '-c', code], os.environ.copy(),
+                              idle_timeout=.08, connect_timeout=.8, retry_delay=.03)
+        collector.start()
+        try:
+            deadline = time.monotonic() + 2
+            while state.snapshot()['primary'] == '—' and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertEqual(state.snapshot()['primary'], '1 V DC')
+        finally:
+            collector.stop()
+            collector.join(timeout=3)
+        self.assertFalse(collector.is_alive())
+
+    def test_retry_policy_backs_off_and_resets_only_after_sustained_samples(self):
+        from rspro_capture import RetryBackoff
+        policy = RetryBackoff(base=2, maximum=30, reset_after=10)
+        self.assertEqual([policy.failed() for _ in range(6)], [2, 4, 8, 16, 30, 30])
+        self.assertEqual(policy.failed(healthy_duration=1), 30)
+        self.assertEqual(policy.failed(healthy_duration=10), 2)
+        self.assertEqual(policy.failed(), 4)
+
     def test_capture_keeps_stdin_open_so_sigrok_does_not_stop_on_eof(self):
         from rspro_dashboard import Collector, MeterState
         # sigrok-cli watches stdin and stops acquisition when it reaches EOF.
@@ -187,7 +217,7 @@ print(child, flush=True)
                     "sys.stderr.write('x'*20000); sys.stderr.flush(); time.sleep(10)")
             state = MeterState('Silent', 'AA:BB:CC:DD:EE:03')
             collector = Collector(state, [sys.executable, '-c', code, str(marker)],
-                                  os.environ.copy(), retry_delay=.02, idle_timeout=.15)
+                                  os.environ.copy(), retry_delay=.02, idle_timeout=.15, connect_timeout=.15)
             collector.start()
             try:
                 deadline = time.monotonic() + 3
@@ -253,7 +283,7 @@ class AutomaticDiscovery(unittest.TestCase):
             return {}
         discovery = Discovery('/not-needed', os.environ.copy())
         reader = threading.Thread(target=lambda: (discovery.snapshot(), responsive.set()))
-        with patch('rspro_dashboard.cached_meters', side_effect=slow_cache):
+        with patch('rspro_discovery.cached_meters', side_effect=slow_cache):
             discovery.start()
             try:
                 self.assertTrue(entered.wait(1))

@@ -3,11 +3,13 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import math
+import json
 import os
 from pathlib import Path
 import queue
 import re
 import threading
+import tempfile
 import time
 
 BASE_UNITS = {'V', 'A', 'F', 'Hz', 'Ω', 'W', 'S', 'H', 's', '°C', '°F', '%', 'dB'}
@@ -16,6 +18,19 @@ PREFIXES = {'p': 1e-12, 'n': 1e-9, 'u': 1e-6, 'µ': 1e-6, 'μ': 1e-6,
 NUMBER = re.compile(r'^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s+(\S+)(?:\s+(.*))?$')
 CSV_FIELDS = ('timestamp_utc', 'meter_address', 'meter_name', 'channel', 'reading', 'value', 'unit', 'mode')
 
+
+
+def app_version():
+    for name in ('rspro-version.txt', 'VERSION'):
+        try:
+            return Path(__file__).with_name(name).read_text().strip()
+        except OSError:
+            pass
+    return 'development'
+
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec='milliseconds')
 
 def normalize_unit(unit):
     unit = unit.replace('Ohm', 'Ω').replace('ohm', 'Ω').replace('Ω', 'Ω')
@@ -95,7 +110,9 @@ def sparkline(values, width=40):
     if low == high:
         return '▄' * len(values)
     glyphs = '▁▂▃▄▅▆▇█'
-    return ''.join(glyphs[min(7, int((value - low) / (high - low) * 7))] for value in values)
+    scale = max(abs(low), abs(high))
+    lo, hi = low / scale, high / scale
+    return ''.join(glyphs[min(7, max(0, int((value / scale - lo) / (hi - lo) * 7)))] for value in values)
 
 
 def make_sample(address, name, channel, text):
@@ -114,17 +131,27 @@ class CSVRecorder(threading.Thread):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.file = self.path.open('x', newline='', encoding='utf-8')
         self.writer = csv.DictWriter(self.file, fieldnames=CSV_FIELDS)
-        try:
-            self.writer.writeheader()
-            self.file.flush()
-        except BaseException:
-            self.file.close()
-            raise
         self.pending = queue.Queue(maxsize=capacity)
         self.lock = threading.Lock()
         self.closing = False
         self.error = ''
-        self.written = 0
+        self.written = self.accepted = self.rejected = self.durable_written = 0
+        self.started_utc = utc_now()
+        self.version = app_version()
+        self.meters = set()
+        self.meta_path = Path(str(self.path) + '.meta.json')
+        try:
+            with self.meta_path.open('x', encoding='utf-8') as meta:
+                json.dump(self.metadata(), meta, indent=2)
+                meta.flush()
+                os.fsync(meta.fileno())
+            self.writer.writeheader()
+            self.file.flush()
+            os.fsync(self.file.fileno())
+            self.sync_directory()
+        except BaseException:
+            self.file.close()
+            raise
         self.start()
 
     def record(self, sample):
@@ -133,7 +160,9 @@ class CSVRecorder(threading.Thread):
                 return False
             try:
                 self.pending.put_nowait(sample)
+                self.accepted += 1
             except queue.Full:
+                self.rejected += 1
                 self.error = 'Recording stopped: write queue is full; recording is incomplete'
                 self.closing = True
                 return False
@@ -141,6 +170,42 @@ class CSVRecorder(threading.Thread):
 
     def write_sample(self, sample):
         self.writer.writerow(sample)
+
+    def sync_directory(self):
+        descriptor = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def metadata(self, completed=False, ended=False):
+        with self.lock:
+            return dict(schema=1, version=self.version, meters=sorted(self.meters), started_utc=self.started_utc,
+                        ended_utc=utc_now() if ended else None, completed=completed,
+                        accepted=self.accepted, written=self.written, rejected=self.rejected,
+                        durable_written=self.durable_written, error=self.error)
+
+    def write_metadata(self, completed=False, ended=False):
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8',
+                                             dir=self.path.parent, delete=False) as file:
+                temporary = Path(file.name)
+                json.dump(self.metadata(completed, ended), file, indent=2)
+                file.write('\n')
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary, self.meta_path)
+            self.sync_directory()
+        finally:
+            if temporary and temporary.exists():
+                temporary.unlink()
+
+    def sync_csv(self):
+        self.file.flush()
+        os.fsync(self.file.fileno())
+        with self.lock:
+            self.durable_written = self.written
 
     def run(self):
         last_flush = time.monotonic()
@@ -150,26 +215,45 @@ class CSVRecorder(threading.Thread):
                     sample = self.pending.get(timeout=.1)
                 except queue.Empty:
                     with self.lock:
-                        if self.closing:
+                        # A producer can enqueue after get() observes empty but
+                        # before stop acquires this lock. Drain that accepted row.
+                        if self.closing and self.pending.empty():
                             break
                 else:
                     self.write_sample(sample)
                     with self.lock:
                         self.written += 1
+                        self.meters.add(sample['meter_address'].upper())
                 if time.monotonic() - last_flush >= .5:
-                    self.file.flush()
+                    self.sync_csv()
+                    self.write_metadata()
                     last_flush = time.monotonic()
-            self.file.flush()
+            self.sync_csv()
+            self.file.close()
+            with self.lock:
+                completed = not self.error and self.accepted == self.written
+            self.write_metadata(completed=completed, ended=True)
         except (OSError, csv.Error, ValueError) as exc:
             with self.lock:
                 self.error = f'Recording stopped: {exc}; recording is incomplete'
                 self.closing = True
-        finally:
             try:
                 self.file.close()
-            except OSError as exc:
-                with self.lock:
-                    self.error = self.error or f'Recording stopped: {exc}'
+            except OSError:
+                pass
+            try:
+                self.write_metadata(ended=True)
+            except OSError:
+                # Replacement may already have published a completion marker
+                # before directory fsync failed. Invalidate without allocating
+                # another temporary file; even a partial JSON write fails audit.
+                try:
+                    with self.meta_path.open('w', encoding='utf-8') as meta:
+                        json.dump(self.metadata(ended=True), meta, indent=2)
+                        meta.flush()
+                        os.fsync(meta.fileno())
+                except OSError:
+                    pass
 
     def close(self):
         with self.lock:
@@ -182,7 +266,8 @@ class CSVRecorder(threading.Thread):
     def snapshot(self):
         with self.lock:
             return dict(active=not self.closing and not self.error,
-                        error=self.error, path=str(self.path), written=self.written)
+                        error=self.error, path=str(self.path), written=self.written,
+                        accepted=self.accepted, rejected=self.rejected)
 
 
 class RecordingSession:

@@ -1,6 +1,5 @@
 import csv
 import math
-import os
 from pathlib import Path
 import sys
 import tempfile
@@ -49,6 +48,10 @@ class NumericFeatures(unittest.TestCase):
         self.assertEqual(sparkline([100, 1, 2, 3], 3), '▁▄█')
         self.assertEqual(sparkline([], 10), '')
         self.assertEqual(sparkline([1], 0), '')
+
+    def test_chart_handles_extreme_finite_values_without_overflow(self):
+        from rspro_features import sparkline
+        self.assertEqual(sparkline([-1e308, 0, 1e308], 3), '▁▄█')
 
 
 class Recording(unittest.TestCase):
@@ -99,10 +102,96 @@ class Recording(unittest.TestCase):
             with path.open(newline='') as file:
                 self.assertEqual(len(list(csv.DictReader(file))), 120)
 
+    def test_stop_drains_sample_accepted_after_an_empty_queue_observation(self):
+        from rspro_features import CSVRecorder
+        from unittest.mock import patch
+        import queue
+        import time
+        observed_empty, release = threading.Event(), threading.Event()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'race.csv'
+            recorder = CSVRecorder(path)
+            original = recorder.pending.get
+            def stale_empty(*args, **kwargs):
+                try:
+                    return original(*args, **kwargs)
+                except queue.Empty:
+                    if not observed_empty.is_set():
+                        observed_empty.set()
+                        release.wait(2)
+                    raise
+            closer = threading.Thread(target=recorder.close)
+            try:
+                with patch.object(recorder.pending, 'get', side_effect=stale_empty):
+                    self.assertTrue(observed_empty.wait(1))
+                    self.assertTrue(recorder.record(self.sample()))
+                    closer.start()
+                    deadline = time.monotonic() + 1
+                    while recorder.snapshot()['active'] and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    release.set()
+                    closer.join(timeout=2)
+                with path.open(newline='') as file:
+                    self.assertEqual(len(list(csv.DictReader(file))), 1)
+            finally:
+                release.set()
+                if closer.ident:
+                    closer.join(timeout=2)
+                recorder.close()
+
+    def test_clean_recording_has_durable_matching_integrity_metadata(self):
+        from rspro_features import CSVRecorder
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'session.csv'
+            recorder = CSVRecorder(path)
+            initial = json.loads(Path(str(path) + '.meta.json').read_text())
+            self.assertFalse(initial['completed'])
+            self.assertTrue(recorder.record(self.sample()))
+            recorder.close()
+            meta = json.loads(Path(str(path) + '.meta.json').read_text())
+            self.assertTrue(meta['completed'])
+            self.assertEqual((meta['accepted'], meta['written'], meta['durable_written'], meta['rejected']), (1, 1, 1, 0))
+            self.assertTrue(meta['version'])
+            self.assertTrue(meta['ended_utc'])
+
+    def test_sync_failure_never_marks_recording_complete(self):
+        from rspro_features import CSVRecorder
+        from unittest.mock import patch
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'session.csv'
+            recorder = CSVRecorder(path)
+            recorder.record(self.sample())
+            with patch('rspro_features.os.fsync', side_effect=OSError('sync failed')):
+                recorder.close()
+            self.assertIn('sync failed', recorder.error)
+            meta = json.loads(Path(str(path) + '.meta.json').read_text())
+            self.assertFalse(meta['completed'])
+
+    def test_final_directory_sync_failure_cannot_leave_success_marker(self):
+        from rspro_features import CSVRecorder
+        from unittest.mock import patch
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'session.csv'
+            recorder = CSVRecorder(path)
+            recorder.record(self.sample())
+            original = recorder.write_metadata
+            def fail_completion(completed=False, ended=False):
+                if not completed:
+                    raise OSError('no space for recovery temporary file')
+                return original(completed, ended)
+            with patch.object(recorder, 'sync_directory', side_effect=OSError('directory sync failed')), \
+                 patch.object(recorder, 'write_metadata', side_effect=fail_completion):
+                recorder.close()
+            self.assertIn('directory sync failed', recorder.error)
+            meta = json.loads(Path(str(path) + '.meta.json').read_text())
+            self.assertFalse(meta['completed'])
+
     def test_full_queue_stops_recording_visibly_and_drains_accepted_samples(self):
         from rspro_features import CSVRecorder
         from unittest.mock import patch
-        import time
         entered, release = threading.Event(), threading.Event()
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'session.csv'
@@ -239,7 +328,6 @@ class MeterSelection(unittest.TestCase):
                 self.assertEqual([r['meter_address'] for r in csv.DictReader(file)], ['AA:BB:CC:DD:EE:03'])
 
     def test_picker_selects_one_multiple_all_and_can_cancel(self):
-        import curses
         from rspro_dashboard import RecordingPicker, MeterState
         meters = [MeterState('First', 'AA:BB:CC:DD:EE:01'), MeterState('Second', 'AA:BB:CC:DD:EE:02')]
         picker = RecordingPicker(meters)

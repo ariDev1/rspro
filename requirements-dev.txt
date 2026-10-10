@@ -1,0 +1,2 @@
+# Development checks only; rspro has no third-party Python runtime dependencies.
+ruff==0.14.0

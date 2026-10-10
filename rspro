@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" == --version && $# == 1 ]]; then
+    SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    exec python3 "$SCRIPT_DIR/rspro_dashboard.py" --version
+fi
+
 if [[ "${1:-}" == "dashboard" ]]; then
     shift
     SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +32,7 @@ Read live measurements from an RS PRO S3 / APPA S3 BLE multimeter.
 Options:
   --raw     Show unfiltered sigrok-cli output.
   --help    Show this help.
+  --version Show the installed rspro version.
 
 Environment:
   RSPRO_DEVICE     BLE MAC address (default: 18:7A:93:E4:4D:E3)

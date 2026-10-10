@@ -70,7 +70,7 @@ Update an existing installation without rebuilding the library:
 ./install_rspro_cli.sh --cli-only
 ```
 
-Each meter has a stable row showing **Measurement** (the main meter reading), **Additional reading** (the auxiliary display value), connection state, and the age of the measurement. An `inf` reading is displayed as `∞`. Its address and latest diagnostic appear below. Disconnected meters remain visible with their last readings and reconnect independently. Primary readings older than five seconds are marked stale while capture is active. Capture retries every two seconds after exiting and restarts after fifteen seconds without any measurements.
+Each meter has a stable row showing **Measurement** (the main meter reading), **Additional reading** (the auxiliary display value), connection state, and the age of the measurement. An `inf` reading is displayed as `∞`. Its address and latest diagnostic appear below. Disconnected meters remain visible with their last readings and reconnect independently. Primary readings older than five seconds are marked stale while capture is active. Capture allows thirty seconds for the first sample, then restarts after fifteen seconds without measurements. Failed connections retry after 2, 4, 8, 16, then 30 seconds; ten seconds of sustained samples resets the delay. Quitting interrupts retry waits immediately.
 
 Use ↑/↓ (or j/k), Page Up/Down, Home/End to scroll, and q or Ctrl+C to exit. Widen the terminal to see all columns. The footer shows discovery activity or errors. There is no configured meter-count limit, but simultaneous BLE capacity depends on the adapter and meters. Collection is independent, not synchronized sampling. Disconnect phone apps that are using these meters.
 
@@ -124,6 +124,8 @@ An existing file is never overwritten. The `--record` option starts recording al
 
 For example, `250 mV DC` is recorded as value `0.25`, unit `V`, mode `DC`, while retaining `250 mV DC` in `reading`. `inf` or other nonnumeric readings keep their original text and have a blank numeric cell. Separate channel rows avoid implying that two asynchronously received values were sampled at exactly the same time. Disconnects do not produce fabricated sample rows. Capture and recording are not synchronized between meters.
 
+Each CSV has a `.meta.json` sidecar recording the application version, meter identities, accepted/written counts, and completion status. Keep both files together. CSV data is flushed and synced at half-second checkpoints, with atomic metadata updates; a sudden kill leaves the session marked incomplete. Clean shutdown drains accepted samples before marking completion.
+
 A bounded writer queue keeps disk writes off the meter collectors. Write failures or a full queue stop recording and display an explicit error; an incomplete recording is not reported as successful. Press r to attempt a new recording after correcting the storage problem.
 
 ### Measurement limits
@@ -168,6 +170,16 @@ Per-meter limits override CLI defaults; `"limits": null` disables them for that 
   Use `prefix/lib64` instead if your build installs there. Logs can include device addresses and measurement data.
 - An Arch package upgrade may change compatibility between `sigrok-cli` and the fork. Inspect the installer's `runtime-version.txt` and `supported.txt`, and rerun the installer after upgrades.
 
+## Reliability baseline
+
+`rspro --version` reports the installed version. Version `0.2.0-rc.1` is a release candidate: automated failure tests pass, but an eight-hour hardware soak is still required before declaring a stable baseline. Follow the [hardware reliability procedure](docs/reliability.md), and audit a finished recording from this checkout:
+
+```bash
+python3 tools/check_recording.py ./lab-session.csv --expect-meters 2
+```
+
+The checker verifies row structure, numeric normalization, meter identities, completion counts, and measurement gaps (five seconds by default). Use `--allow-gaps` only for a session with intentional outages. Recordings from older versions without metadata cannot verify clean completion.
+
 ## Development and verification
 
 ```bash
@@ -175,6 +187,6 @@ python3 -m unittest discover -s tests -v
 bash -n rspro install_rspro_cli.sh
 ```
 
-Tests exercise argument validation, output filtering, raw output, error propagation, configuration validation, automatic discovery and adding meters during capture, CSV recording and failure handling, SI prefix normalization, bounded trends, unit-aware alerts, concurrent collection/retry/cleanup, curses scrolling and resizing through a pseudo-terminal, and isolated CLI-only installation. CLI tests use a stand-in for sigrok, so they do not require Bluetooth hardware. A real installation verifies library loading and the `appa-dmm` driver without connecting to a meter. Hardware capture must be checked separately on the target machine.
+See [CI setup and matching local checks](docs/ci.md). Tests exercise argument validation, output filtering, raw output, error propagation, configuration validation, automatic discovery and adding meters during capture, CSV recording and failure handling, SI prefix normalization, bounded trends, unit-aware alerts, concurrent collection/retry/cleanup, curses scrolling and resizing through a pseudo-terminal, and isolated CLI-only installation. CLI tests use a stand-in for sigrok, so they do not require Bluetooth hardware. A real installation verifies library loading and the `appa-dmm` driver without connecting to a meter. Hardware capture must be checked separately on the target machine.
 
 The wrapper and installer use the repository MIT license. The patch modifies GPL-3.0-or-later libsigrok code and is provided under GPL-3.0-or-later; libsigrok retains its upstream license.
