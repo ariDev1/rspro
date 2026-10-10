@@ -46,7 +46,7 @@ class DashboardCLI(unittest.TestCase):
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 14, 110, 0, 0))
             env = {**os.environ, 'TERM': 'xterm-256color', 'RSPRO_ROOT': tmp,
                    'RSPRO_USE_SUDO': 'no', 'RSPRO_SIGROK_BIN': str(stub)}
-            process = subprocess.Popen([str(REPO / 'rspro'), 'dashboard', '--config', str(config)],
+            process = subprocess.Popen([str(REPO / 'rspro'), 'dashboard', '--configured-only', '--config', str(config)],
                                        stdin=slave, stdout=slave, stderr=slave, env=env,
                                        start_new_session=True)
             output = bytearray()
@@ -71,6 +71,56 @@ class DashboardCLI(unittest.TestCase):
             finally:
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGTERM)
+                    process.wait(timeout=5)
+                os.close(master)
+                os.close(slave)
+
+    def test_discovers_new_meters_live_without_any_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'prefix/lib').mkdir(parents=True)
+            bluetooth = root / 'bluetoothctl'
+            bluetooth.write_text("#!/usr/bin/env python3\nimport sys,time\n"
+                "if sys.argv[1:] == ['devices']: sys.exit(0)\n"
+                "print('[NEW] Device AA:BB:CC:DD:EE:01 RS PRO S3', flush=True)\n"
+                "time.sleep(.8)\n"
+                "print('[NEW] Device AA:BB:CC:DD:EE:02 APPA S3', flush=True)\n"
+                "print('[NEW] Device AA:BB:CC:DD:EE:03 headphones', flush=True)\n"
+                "print('[CHG] Device AA:BB:CC:DD:EE:01 Name: RS PRO S3', flush=True)\n"
+                "time.sleep(20)\n")
+            bluetooth.chmod(0o755)
+            sigrok = root / 'sigrok-cli'
+            sigrok.write_text('#!/bin/bash\n'
+                'if [[ "$*" == *EE-01* ]]; then reading="1.11 V DC"; else reading="2.22 V DC"; fi\n'
+                'while true; do echo "Primary: $reading"; sleep .1; done\n')
+            sigrok.chmod(0o755)
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 110, 0, 0))
+            process = subprocess.Popen([str(REPO / 'rspro'), 'dashboard'],
+                stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
+                env={**os.environ, 'TERM': 'xterm-256color', 'RSPRO_ROOT': tmp,
+                     'RSPRO_USE_SUDO': 'no', 'RSPRO_CONFIG': str(root / 'missing.json'),
+                     'RSPRO_BLUETOOTH_BIN': str(bluetooth), 'RSPRO_SIGROK_BIN': str(sigrok)})
+            output = bytearray()
+            try:
+                deadline = time.monotonic() + 4
+                while time.monotonic() < deadline:
+                    if select.select([master], [], [], .1)[0]:
+                        try:
+                            output.extend(os.read(master, 65536))
+                        except OSError:
+                            break
+                    if b'1.11 V DC' in output and b'2.22 V DC' in output:
+                        break
+                self.assertIn(b'1.11 V DC', output)
+                self.assertIn(b'2.22 V DC', output)
+                self.assertNotIn(b'headphones', output)
+                self.assertFalse((root / 'missing.json').exists())
+                os.write(master, b'q')
+                self.assertEqual(process.wait(timeout=5), 0)
+            finally:
+                if process.poll() is None:
+                    process.send_signal(signal.SIGTERM)
                     process.wait(timeout=5)
                 os.close(master)
                 os.close(slave)

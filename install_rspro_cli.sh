@@ -38,7 +38,7 @@ fi
 }
 JOBS="${RSPRO_JOBS:-2}"
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: Invalid RSPRO_JOBS." >&2; exit 2; }
-for tool in python3 stdbuf install; do
+for tool in python3 stdbuf bluetoothctl install; do
     command -v "$tool" >/dev/null || { echo "ERROR: Missing $tool; see README.md." >&2; exit 1; }
 done
 python3 -c 'import curses, sys; sys.exit(0 if sys.version_info >= (3, 11) else "Python 3.11 or newer is required.")'

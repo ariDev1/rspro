@@ -202,6 +202,76 @@ print(child, flush=True)
                 collector.join(timeout=3)
             self.assertFalse(collector.is_alive())
 
+class AutomaticDiscovery(unittest.TestCase):
+    def test_matches_only_s3_meters_and_normalizes_scan_events(self):
+        from rspro_dashboard import parse_discovery_line
+        cases = [
+            ('Device 18:7A:93:E4:4D:D1 RS PRO S3', ('18:7A:93:E4:4D:D1', 'RS PRO S3')),
+            ('[NEW] Device aa:bb:cc:dd:ee:ff APPA S3', ('AA:BB:CC:DD:EE:FF', 'APPA S3')),
+            ('[CHG] Device 18:7A:93:E4:4D:D1 Name: RS PRO S3', ('18:7A:93:E4:4D:D1', 'RS PRO S3')),
+            ('[\x1b[0;92mNEW\x1b[0m] Device 18:7A:93:E4:4D:D1 RS PRO S3', ('18:7A:93:E4:4D:D1', 'RS PRO S3')),
+            ('Device AA:BB:CC:DD:EE:01 headphones', None),
+            ('[CHG] Device 18:7A:93:E4:4D:D1 RSSI: -40', None),
+            ('Device AA:BB:CC:DD:EE:01 APPA S30', None),
+        ]
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(parse_discovery_line(line), expected)
+
+    def test_new_advertisement_is_available_before_scan_ends_and_deduplicated(self):
+        from rspro_dashboard import Discovery
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp) / 'bluetoothctl'
+            fixture.write_text("#!/usr/bin/env python3\nimport sys,time\n"
+                               "if sys.argv[1:] == ['devices']: sys.exit(0)\n"
+                               "print('[NEW] Device 18:7A:93:E4:4D:D1 RS PRO S3', flush=True)\n"
+                               "print('[CHG] Device 18:7A:93:E4:4D:D1 Name: RS PRO S3', flush=True)\n"
+                               "time.sleep(10)\n")
+            fixture.chmod(0o755)
+            discovery = Discovery(str(fixture), os.environ.copy(), scan_duration=10, retry_delay=.02)
+            discovery.start()
+            try:
+                deadline = time.monotonic() + 2
+                while not discovery.snapshot()[0] and time.monotonic() < deadline:
+                    time.sleep(.02)
+                found, status = discovery.snapshot()
+                self.assertEqual(found, {'18:7A:93:E4:4D:D1': 'RS PRO S3'})
+                self.assertIn('Scanning', status)
+            finally:
+                discovery.stop()
+                discovery.join(timeout=3)
+            self.assertFalse(discovery.is_alive())
+
+    def test_snapshot_stays_responsive_while_cache_query_is_pending(self):
+        from rspro_dashboard import Discovery
+        from unittest.mock import patch
+        import threading
+        entered, release, responsive = threading.Event(), threading.Event(), threading.Event()
+        def slow_cache(*args):
+            entered.set()
+            release.wait(2)
+            return {}
+        discovery = Discovery('/not-needed', os.environ.copy())
+        reader = threading.Thread(target=lambda: (discovery.snapshot(), responsive.set()))
+        with patch('rspro_dashboard.cached_meters', side_effect=slow_cache):
+            discovery.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                reader.start()
+                self.assertTrue(responsive.wait(.2), 'cache lookup blocked dashboard snapshots')
+            finally:
+                discovery.stop()
+                release.set()
+                reader.join(timeout=2)
+                discovery.join(timeout=2)
+
+    def test_auto_mode_can_start_discovery_without_config_cache_or_sudo(self):
+        from rspro_dashboard import needs_sudo
+        from unittest.mock import patch
+        with patch.dict(os.environ, {'RSPRO_USE_SUDO': 'auto'}), \
+             patch('rspro_dashboard.subprocess.run', side_effect=AssertionError('authentication before discovery')):
+            self.assertFalse(needs_sudo('/not-needed', os.environ.copy(), None))
+
 
 if __name__ == '__main__':
     unittest.main()
