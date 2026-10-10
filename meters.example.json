@@ -1,0 +1,7 @@
+{
+  "meters": [
+    {"name": "Power supply", "address": "AA:BB:CC:DD:EE:01"},
+    {"name": "Battery", "address": "AA:BB:CC:DD:EE:02"},
+    {"name": "Bench 3", "address": "AA:BB:CC:DD:EE:03"}
+  ]
+}

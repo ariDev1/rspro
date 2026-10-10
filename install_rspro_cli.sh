@@ -7,12 +7,14 @@ SOURCE_URL="${RSPRO_SOURCE_URL:-https://github.com/Cymaphore/libsigrok.git}"
 ROOT_DIR="${RSPRO_ROOT:-${HOME}/.local/share/rspro-sigrok}"
 DEST_DIR="${RSPRO_BIN_DIR:-${HOME}/.local/bin}"
 
+CLI_ONLY=0
 if (( $# )); then
     if (( $# == 1 )) && [[ "$1" == --help || "$1" == -h ]]; then
         cat <<'HELP'
-Usage: ./install_rspro_cli.sh [--help]
+Usage: ./install_rspro_cli.sh [--help] [--cli-only]
 Build pinned, patched libsigrok and install the rspro CLI.
 Install Arch/Omarchy dependencies listed in README.md first.
+--cli-only updates the CLI and dashboard without rebuilding libsigrok.
 
 Environment:
   RSPRO_ROOT        Build/install root (default: ~/.local/share/rspro-sigrok)
@@ -22,8 +24,12 @@ Environment:
 HELP
         exit 0
     fi
-    echo "ERROR: Unknown installer arguments. See --help." >&2
-    exit 2
+    if (( $# == 1 )) && [[ "$1" == --cli-only ]]; then
+        CLI_ONLY=1
+    else
+        echo "ERROR: Unknown installer arguments. See --help." >&2
+        exit 2
+    fi
 fi
 
 [[ "$ROOT_DIR" == /* && "$DEST_DIR" == /* ]] || {
@@ -32,6 +38,25 @@ fi
 }
 JOBS="${RSPRO_JOBS:-2}"
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: Invalid RSPRO_JOBS." >&2; exit 2; }
+for tool in python3 stdbuf install; do
+    command -v "$tool" >/dev/null || { echo "ERROR: Missing $tool; see README.md." >&2; exit 1; }
+done
+python3 -c 'import curses, sys; sys.exit(0 if sys.version_info >= (3, 11) else "Python 3.11 or newer is required.")'
+
+install_cli() {
+    mkdir -p "$DEST_DIR"
+    install -m 0755 "$SRC_DIR/rspro" "$DEST_DIR/rspro"
+    install -m 0644 "$SRC_DIR/rspro_dashboard.py" "$DEST_DIR/rspro_dashboard.py"
+    "$DEST_DIR/rspro" --help >/dev/null
+    "$DEST_DIR/rspro" dashboard --help >/dev/null
+    echo "Installed $DEST_DIR/rspro and terminal dashboard."
+}
+
+if (( CLI_ONLY )); then
+    install_cli
+    exit 0
+fi
+
 for tool in git make gcc pkg-config autoreconf libtoolize install sigrok-cli; do
     command -v "$tool" >/dev/null || { echo "ERROR: Missing $tool; see README.md." >&2; exit 1; }
 done
@@ -68,9 +93,7 @@ if ! grep -q 'appa-dmm' "$BUILD_DIR/supported.txt"; then
     echo "ERROR: Built library does not expose appa-dmm; inspect $BUILD_DIR." >&2
     exit 1
 fi
-mkdir -p "$DEST_DIR"
-install -m 0755 "$SRC_DIR/rspro" "$DEST_DIR/rspro"
-"$DEST_DIR/rspro" --help >/dev/null
+install_cli
 echo "Installed $DEST_DIR/rspro; runtime verification saved in $BUILD_DIR."
 case ":$PATH:" in
     *":$DEST_DIR:"*) ;;

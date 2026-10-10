@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" == "dashboard" ]]; then
+    shift
+    SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    exec python3 "$SCRIPT_DIR/rspro_dashboard.py" "$@"
+fi
+
 DEVICE_MAC="${RSPRO_DEVICE:-18:7A:93:E4:4D:E3}"
 DEVICE_ID="${DEVICE_MAC//:/-}"
 ROOT_DIR="${RSPRO_ROOT:-${HOME}/.local/share/rspro-sigrok}"
@@ -14,6 +20,7 @@ USE_SUDO="${RSPRO_USE_SUDO:-auto}"
 usage() {
     cat <<'EOF'
 Usage: rspro [--raw] [--help]
+       rspro dashboard [--config PATH] [--help]
 
 Read live measurements from an RS PRO S3 / APPA S3 BLE multimeter.
 
