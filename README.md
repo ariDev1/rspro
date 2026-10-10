@@ -1,8 +1,20 @@
 # rspro
 
-Read live measurements from an RS PRO S3 / APPA S3 Bluetooth Low Energy multimeter on Omarchy (Arch Linux), using the `appa-dmm` sigrok driver.
+A terminal dashboard for all your RS PRO S3 / APPA S3 Bluetooth Low Energy multimeters on Omarchy (Arch Linux). Discover meters automatically, view their measurements together, follow trends, and record selected meters to CSV. Capture uses the `appa-dmm` sigrok driver.
 
 The installer builds a pinned libsigrok fork with the [S3 timing patch](patches/libsigrok-appa-s3-timing.patch). The CLI loads that library from a user-local prefix. The source changes needed to reproduce the setup are in this repository.
+
+## Quick start
+
+After installation, turn on your meters, enable Bluetooth on each, and run:
+
+```bash
+rspro dashboard
+```
+
+Meters appear automatically, including meters switched on later. No address file is required. Press **r** to choose meters to record, **t** to hide/show trends, and **q** to quit.
+
+Current version: **0.2.0-rc.1**, a reliability release candidate. Automated checks cover Python 3.11 and 3.14; the [eight-hour hardware test](docs/reliability.md) remains the gate for declaring a stable release.
 
 ## Install on Omarchy
 
@@ -25,35 +37,6 @@ export PATH="$HOME/.local/bin:$PATH"
 
 Each installation uses a fresh checkout under `~/.local/share/rspro-sigrok/builds`; existing source checkouts and debug logs are preserved. Re-running rebuilds the pinned library and replaces the CLI. Runtime version and supported-driver reports remain in the build directory. The installed Arch `sigrok-cli` is used; this is source reproducibility, not a bit-for-bit build or a pinned Arch package set.
 
-## Read measurements
-
-Turn on the meter and enable its Bluetooth function. Find its address using `bluetoothctl` (`power on`, `scan on`, then `scan off`). Disconnect any phone app using the meter before starting.
-
-```bash
-RSPRO_DEVICE=AA:BB:CC:DD:EE:FF rspro
-```
-
-Output includes the primary measurement, for example `27.57 V DC`. Use `--raw` for all sigrok output, including the secondary channel. Press Ctrl+C to stop.
-
-```bash
-RSPRO_DEVICE=AA:BB:CC:DD:EE:FF rspro --raw
-rspro --help
-```
-
-For compatibility with the original local setup, the default address is `18:7A:93:E4:4D:E3`. Set `RSPRO_DEVICE` to your own meter address, optionally by exporting it in your shell configuration.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `RSPRO_DEVICE` | `18:7A:93:E4:4D:E3` | Colon-separated BLE address |
-| `RSPRO_USE_SUDO` | `auto` | `auto`, `yes`, or `no`; auto probes discovery without sudo and retries execution with sudo if discovery fails |
-| `RSPRO_ROOT` | `~/.local/share/rspro-sigrok` | Build root for installer and CLI |
-| `RSPRO_SIGROK_BIN` | `sigrok-cli` | CLI executable, optionally an absolute path |
-| `RSPRO_BIN_DIR` | `~/.local/bin` | Installer CLI destination |
-| `RSPRO_JOBS` | `2` | Installer parallel build jobs |
-| `RSPRO_SOURCE_URL` | Cymaphore GitHub repository | Installer source mirror containing the pinned commit |
-
-When installing to a custom root, use the same `RSPRO_ROOT` when running the CLI. The CLI accepts paths containing spaces.
-
 ## Lab terminal dashboard
 
 Switch on your S3 meters, enable their Bluetooth function, and start:
@@ -64,24 +47,42 @@ rspro dashboard
 
 **No address configuration is required.** The dashboard uses BlueZ's known S3 devices and automatically scans for `RS PRO S3` and `APPA S3` advertisements. It repeats eight-second discovery rounds with two-second pauses, and adds meters as soon as their advertisement arrives. You can switch on more meters while the dashboard is running; they appear and begin capture without a restart. Other Bluetooth devices are ignored. Each automatically added meter gets its advertised name and address suffix as a label, for example `RS PRO S3 · 4D:E3`.
 
-Update an existing installation without rebuilding the library:
+### Update an existing installation
+
+From your repository checkout:
 
 ```bash
+git pull --ff-only
 ./install_rspro_cli.sh --cli-only
+rspro --version
 ```
 
-Each meter has a stable row showing **Measurement** (the main meter reading), **Additional reading** (the auxiliary display value), connection state, and the age of the measurement. An `inf` reading is displayed as `∞`. Its address and latest diagnostic appear below. Disconnected meters remain visible with their last readings and reconnect independently. Primary readings older than five seconds are marked stale while capture is active. Capture allows thirty seconds for the first sample, then restarts after fifteen seconds without measurements. Failed connections retry after 2, 4, 8, 16, then 30 seconds; ten seconds of sustained samples resets the delay. Quitting interrupts retry waits immediately.
+This updates the CLI and dashboard while preserving your meter configuration. Exit and restart any running dashboard to use the update. For a first installation, or to rebuild the patched library, run `./install_rspro_cli.sh` without `--cli-only`.
 
-Use ↑/↓ (or j/k), Page Up/Down, Home/End to scroll, and q or Ctrl+C to exit. Widen the terminal to see all columns. The footer shows discovery activity or errors. There is no configured meter-count limit, but simultaneous BLE capacity depends on the adapter and meters. Collection is independent, not synchronized sampling. Disconnect phone apps that are using these meters.
+Each meter has a stable row showing **Measurement** (the main meter reading), **Additional reading** (the auxiliary display value), connection state, and the age of the measurement. An `inf` reading is displayed as `∞`. Its address and latest diagnostic appear below. Disconnected meters remain visible with their last readings and reconnect independently. Measurements older than five seconds are marked stale while capture is active. Capture allows thirty seconds for the first sample, then restarts after fifteen seconds without measurements. Failed connections retry after 2, 4, 8, 16, then 30 seconds; ten seconds of sustained samples resets the delay. Quitting interrupts retry waits immediately.
+
+### Keyboard controls
+
+| Key | Action |
+| --- | --- |
+| ↑/↓ or j/k | Scroll through meters |
+| Page Up/Down, Home/End | Move through the dashboard |
+| r | Choose meters to record, or stop an active recording |
+| t | Show/hide trends |
+| q or Ctrl+C | Quit and finish the recording |
+
+In the recording picker, use ↑/↓ to highlight a meter, Space to select multiple meters, **a** for all meters, Enter to start, and Esc to cancel.
+
+ Widen the terminal to see all columns. The footer shows discovery activity or errors. There is no configured meter-count limit, but simultaneous BLE capacity depends on the adapter and meters. Collection is independent, not synchronized sampling. Disconnect phone apps that are using these meters.
 
 ### Optional friendly names
 
-Existing `~/.config/rspro/meters.json` files are preserved. They can supply lab names and previously known addresses; automatic discovery still adds other meters:
+Labels such as `RS PRO S3 · 4D:E3` identify the model and address suffix; a label such as `Bench meter` is a name you assign, not a measurement reported by the meter. Existing `~/.config/rspro/meters.json` files are preserved. They can supply lab names and previously known addresses; automatic discovery still adds other meters:
 
 ```json
 {
   "meters": [
-    {"name": "Power supply", "address": "18:7A:93:E4:4D:E3"}
+    {"name": "Bench meter", "address": "AA:BB:CC:DD:EE:FF"}
   ]
 }
 ```
@@ -124,9 +125,9 @@ An existing file is never overwritten. The `--record` option starts recording al
 
 For example, `250 mV DC` is recorded as value `0.25`, unit `V`, mode `DC`, while retaining `250 mV DC` in `reading`. `inf` or other nonnumeric readings keep their original text and have a blank numeric cell. Separate channel rows avoid implying that two asynchronously received values were sampled at exactly the same time. Disconnects do not produce fabricated sample rows. Capture and recording are not synchronized between meters.
 
-Each CSV has a `.meta.json` sidecar recording the application version, meter identities, accepted/written counts, and completion status. Keep both files together. CSV data is flushed and synced at half-second checkpoints, with atomic metadata updates; a sudden kill leaves the session marked incomplete. Clean shutdown drains accepted samples before marking completion.
+A recording named `lab-session.csv` has a companion `lab-session.csv.meta.json` file recording the application version, meter identities, accepted/written counts, and completion status. Keep both files together. CSV data is flushed and synced at half-second checkpoints, with atomic metadata updates; a sudden kill leaves the session marked incomplete. Clean shutdown drains accepted samples before marking completion.
 
-A bounded writer queue keeps disk writes off the meter collectors. Write failures or a full queue stop recording and display an explicit error; an incomplete recording is not reported as successful. Press r to attempt a new recording after correcting the storage problem.
+A bounded writer queue keeps disk writes off the meter collectors. Write failures or a full queue stop recording and display an explicit error; an incomplete recording is not reported as successful. Press r to attempt a new recording after correcting the storage problem. A host crash or forced kill can lose buffered samples; keep incomplete files for investigation, and use the recording checker below before treating a session as complete.
 
 ### Measurement limits
 
@@ -154,6 +155,35 @@ CLI limits apply to all configured and newly discovered meters. To give one mete
 
 Per-meter limits override CLI defaults; `"limits": null` disables them for that meter. Automatic discovery remains enabled. The configuration is loaded at startup, so restart after editing limits.
 
+## Single-meter stream
+
+Turn on the meter and enable its Bluetooth function. Find its address using `bluetoothctl` (`power on`, `scan on`, then `scan off`). Disconnect any phone app using the meter before starting.
+
+```bash
+RSPRO_DEVICE=AA:BB:CC:DD:EE:FF rspro
+```
+
+Output includes the main measurement, for example `27.57 V DC`. Use `--raw` for all sigrok output, including the additional reading. Press Ctrl+C to stop.
+
+```bash
+RSPRO_DEVICE=AA:BB:CC:DD:EE:FF rspro --raw
+rspro --help
+```
+
+For compatibility with the original local setup, the default address is `18:7A:93:E4:4D:E3`. Set `RSPRO_DEVICE` to your own meter address, optionally by exporting it in your shell configuration.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RSPRO_DEVICE` | `18:7A:93:E4:4D:E3` | Colon-separated BLE address |
+| `RSPRO_USE_SUDO` | `auto` | `auto`, `yes`, or `no`; auto probes discovery without sudo and retries execution with sudo if discovery fails |
+| `RSPRO_ROOT` | `~/.local/share/rspro-sigrok` | Build root for installer and CLI |
+| `RSPRO_SIGROK_BIN` | `sigrok-cli` | CLI executable, optionally an absolute path |
+| `RSPRO_BIN_DIR` | `~/.local/bin` | Installer CLI destination |
+| `RSPRO_JOBS` | `2` | Installer parallel build jobs |
+| `RSPRO_SOURCE_URL` | Cymaphore GitHub repository | Installer source mirror containing the pinned commit |
+
+When installing to a custom root, use the same `RSPRO_ROOT` when running the CLI. The CLI accepts paths containing spaces.
+
 ## Troubleshooting
 
 - If the local library is missing, run the installer. A system libsigrok alone does not provide this patched setup.
@@ -178,7 +208,9 @@ Per-meter limits override CLI defaults; `"limits": null` disables them for that 
 python3 tools/check_recording.py ./lab-session.csv --expect-meters 2
 ```
 
-The checker verifies row structure, numeric normalization, meter identities, completion counts, and measurement gaps (five seconds by default). Use `--allow-gaps` only for a session with intentional outages. Recordings from older versions without metadata cannot verify clean completion.
+Replace `2` with the number of meters you recorded. Run the checker after stopping the recording; an active recording is still marked incomplete. Exit code 0 means the audit passed, 1 means the evidence failed validation, and 2 means the command arguments were invalid.
+
+The checker verifies row structure, numeric normalization, meter identities, UTC session timestamps, completion counts, and measurement gaps (five seconds by default). Use `--allow-gaps` only for a session with intentional outages. Recordings from older versions without metadata cannot verify clean completion.
 
 ## Development and verification
 
