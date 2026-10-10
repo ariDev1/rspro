@@ -31,8 +31,10 @@ Accepted sample racing stop; fsync/metadata failure or sudden interruption; slow
 - [x] Add VERSION/--version and install version artifact; include metadata version.
 - [x] Document hardware soak and release gate, with current verification evidence.
 - [x] Run full tests/lint/syntax/checker, independent review and local installation.
-- [ ] Push and confirm hosted CI under existing authorization.
+- [x] Push and confirm hosted CI under existing authorization.
 
 ## Verification evidence
 
 54 unittest tests pass on local Python 3.14; Ruff functional lint, Bash syntax, Python compilation and git diff checks pass. PTY tests verify SIGINT, SIGTERM and SIGHUP flush/reap; SIGKILL leaves incomplete evidence. Independent review found and resolved final metadata sync false-success and missing metadata timestamp validation, both with failing-first regressions. Installed CLI reports 0.2.0-rc.1; naming configuration preserved. The eight-hour physical soak is documented but has not been run for this candidate.
+
+Hosted CI for implementation commit 479db04 passed on Python 3.11 and 3.14: https://github.com/ariDev1/rspro/actions/runs/38082648893
