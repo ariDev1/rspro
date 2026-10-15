@@ -303,5 +303,37 @@ class AutomaticDiscovery(unittest.TestCase):
             self.assertFalse(needs_sudo('/not-needed', os.environ.copy(), None))
 
 
+class BluetoothAdapter(unittest.TestCase):
+    def _btmgmt(self, root, output, returncode=0):
+        path = root / 'btmgmt'
+        path.write_text('#!/usr/bin/env python3\n'
+                        'import sys\n'
+                        'sys.stdout.write(' + repr(output) + ')\n'
+                        'sys.exit(' + str(returncode) + ')\n')
+        path.chmod(0o755)
+        return str(path)
+
+    def test_le_support_is_read_from_controller_settings(self):
+        from rspro_dashboard import adapter_supports_le
+        cases = [
+            ('hci0:\tPrimary controller\n\tsupported settings: powered le br/edr\n', 0, True),
+            ('hci0:\tPrimary controller\n\tsupported settings: powered connectable br/edr ssp\n', 0, False),
+            ('hci0:\tPrimary controller\n\tsupported settings: powered br/edr\n'
+             'hci1:\tPrimary controller\n\tsupported settings: powered le\n', 0, True),
+            ('Index list with 0 items\n', 0, None),
+            ('No controller found\n', 1, None),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            for output, returncode, expected in cases:
+                with self.subTest(output=output):
+                    binary = self._btmgmt(Path(tmp), output, returncode)
+                    self.assertEqual(adapter_supports_le(binary, os.environ.copy()), expected)
+
+    def test_missing_or_unusable_tool_is_inconclusive(self):
+        from rspro_dashboard import adapter_supports_le
+        self.assertIsNone(adapter_supports_le(None))
+        self.assertIsNone(adapter_supports_le('/nonexistent/btmgmt', os.environ.copy()))
+
+
 if __name__ == '__main__':
     unittest.main()

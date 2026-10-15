@@ -15,11 +15,16 @@ import threading
 import time
 
 from rspro_capture import Collector as Collector, clean_text, stop_process as stop_process
+from rspro_discovery import adapter_supports_le as adapter_supports_le
 from rspro_discovery import Discovery as Discovery, cached_meters, parse_discovery_line as parse_discovery_line
 from rspro_features import Limits, RecordingSession, app_version, make_sample, parse_reading, sparkline
 
 STALE_AFTER = 5.0
 MAC = re.compile(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\Z')
+BLE_REQUIRED_MESSAGE = (
+    'The Bluetooth adapter on this computer does not support Bluetooth Low Energy (BLE), '
+    'which RS PRO S3 and APPA S3 meters require to be discovered. Use a Bluetooth 4.0 or '
+    'newer adapter, and make sure it is the one selected by BlueZ.')
 
 
 class MeterState:
@@ -431,6 +436,9 @@ def main(argv=None):
             raise ValueError('--configured-only requires a meter configuration.')
         if not sys.stdin.isatty() or not sys.stdout.isatty():
             raise ValueError('The dashboard requires an interactive terminal.')
+        btmgmt = shutil.which(os.environ.get('RSPRO_BTMGMT_BIN', 'btmgmt'))
+        if adapter_supports_le(btmgmt, os.environ.copy()) is False:
+            raise ValueError(BLE_REQUIRED_MESSAGE)
         binary, stdbuf, env = capture_environment()
         discovery = None
         if not args.configured_only:

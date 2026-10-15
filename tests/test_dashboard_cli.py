@@ -15,6 +15,15 @@ import unittest
 REPO = Path(__file__).resolve().parents[1]
 
 
+def fake_btmgmt(root, settings='powered connectable le br/edr ssp'):
+    """Stand-in for btmgmt whose 'info' reports the given adapter settings."""
+    path = root / 'btmgmt'
+    path.write_text('#!/usr/bin/env python3\n'
+                    'print("\\tsupported settings: ' + settings + '")\n')
+    path.chmod(0o755)
+    return path
+
+
 class DashboardCLI(unittest.TestCase):
     def test_dashboard_help_dispatches_without_capture(self):
         result = subprocess.run([str(REPO / 'rspro'), 'dashboard', '--help'],
@@ -28,6 +37,43 @@ class DashboardCLI(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertIn('meter configuration', result.stderr)
+
+    def test_adapter_without_ble_stops_with_clear_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'prefix/lib').mkdir(parents=True)
+            config = root / 'meters.json'
+            config.write_text(json.dumps({'meters': [
+                {'name': 'Bench meter', 'address': 'AA:BB:CC:DD:EE:01'}]}))
+            stub = root / 'sigrok-cli'
+            stub.write_text('#!/bin/bash\nwhile true; do echo "Primary: 1 V DC"; sleep .1; done\n')
+            stub.chmod(0o755)
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 110, 0, 0))
+            process = subprocess.Popen([str(REPO / 'rspro'), 'dashboard', '--configured-only',
+                '--config', str(config)], stdin=slave, stdout=slave, stderr=slave,
+                start_new_session=True,
+                env={**os.environ, 'TERM': 'xterm-256color', 'RSPRO_ROOT': tmp,
+                     'RSPRO_USE_SUDO': 'no', 'RSPRO_SIGROK_BIN': str(stub),
+                     'RSPRO_BTMGMT_BIN': str(fake_btmgmt(root, settings='powered connectable br/edr ssp'))})
+            output = bytearray()
+            try:
+                deadline = time.monotonic() + 4
+                while process.poll() is None and time.monotonic() < deadline:
+                    if select.select([master], [], [], .1)[0]:
+                        try:
+                            output.extend(os.read(master, 65536))
+                        except OSError:
+                            break
+                self.assertEqual(process.wait(timeout=5), 1)
+                self.assertIn(b'Bluetooth Low Energy', output)
+                self.assertIn(b'Bluetooth 4.0', output)
+            finally:
+                if process.poll() is None:
+                    process.send_signal(signal.SIGTERM)
+                    process.wait(timeout=5)
+                os.close(master)
+                os.close(slave)
 
     def test_terminal_render_scroll_resize_and_quit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -45,7 +91,8 @@ class DashboardCLI(unittest.TestCase):
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 14, 110, 0, 0))
             env = {**os.environ, 'TERM': 'xterm-256color', 'RSPRO_ROOT': tmp,
-                   'RSPRO_USE_SUDO': 'no', 'RSPRO_SIGROK_BIN': str(stub)}
+                   'RSPRO_USE_SUDO': 'no', 'RSPRO_SIGROK_BIN': str(stub),
+                   'RSPRO_BTMGMT_BIN': str(fake_btmgmt(root))}
             process = subprocess.Popen([str(REPO / 'rspro'), 'dashboard', '--configured-only', '--config', str(config)],
                                        stdin=slave, stdout=slave, stderr=slave, env=env,
                                        start_new_session=True)
@@ -101,6 +148,7 @@ class DashboardCLI(unittest.TestCase):
                 stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
                 env={**os.environ, 'TERM': 'xterm-256color', 'RSPRO_ROOT': tmp,
                      'RSPRO_USE_SUDO': 'no', 'RSPRO_CONFIG': str(root / 'missing.json'),
+                     'RSPRO_BTMGMT_BIN': str(fake_btmgmt(root)),
                      'RSPRO_BLUETOOTH_BIN': str(bluetooth), 'RSPRO_SIGROK_BIN': str(sigrok)})
             output = bytearray()
             try:
@@ -152,7 +200,8 @@ class DashboardCLI(unittest.TestCase):
                 '--config', str(config), '--record', str(csv_path), '--below', '24', '--unit', 'V', '--mode', 'DC'],
                 stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
                 env={**os.environ, 'TERM': 'xterm-256color', 'RSPRO_ROOT': tmp,
-                     'RSPRO_USE_SUDO': 'no', 'RSPRO_SIGROK_BIN': str(stub), 'XDG_DATA_HOME': str(root / 'data')})
+                     'RSPRO_USE_SUDO': 'no', 'RSPRO_SIGROK_BIN': str(stub),
+                     'RSPRO_BTMGMT_BIN': str(fake_btmgmt(root)), 'XDG_DATA_HOME': str(root / 'data')})
             output = bytearray()
             try:
                 deadline = time.monotonic() + 4
@@ -206,7 +255,8 @@ class DashboardCLI(unittest.TestCase):
             process = subprocess.Popen([str(REPO / 'rspro'), 'dashboard', '--configured-only', '--config', str(config)],
                 stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
                 env={**os.environ, 'TERM': 'xterm-256color', 'RSPRO_ROOT': tmp,
-                     'RSPRO_USE_SUDO': 'no', 'RSPRO_SIGROK_BIN': str(stub), 'XDG_DATA_HOME': str(root / 'data')})
+                     'RSPRO_USE_SUDO': 'no', 'RSPRO_SIGROK_BIN': str(stub),
+                     'RSPRO_BTMGMT_BIN': str(fake_btmgmt(root)), 'XDG_DATA_HOME': str(root / 'data')})
             output = bytearray()
             def wait_for(token):
                 deadline = time.monotonic() + 3

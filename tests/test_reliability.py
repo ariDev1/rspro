@@ -29,6 +29,10 @@ class Shutdown(unittest.TestCase):
                                "with Path(sys.argv[0]).with_name('pids').open('a') as f: f.write(str(os.getpid())+'\\n')\n"
                                "while True:\n    print('Primary: 23 V DC', flush=True)\n    time.sleep(.03)\n")
             fixture.chmod(0o755)
+            btmgmt = root / 'btmgmt'
+            btmgmt.write_text("#!/usr/bin/env python3\n"
+                              "print('\\tsupported settings: powered connectable le br/edr')\n")
+            btmgmt.chmod(0o755)
             for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
                 with self.subTest(signal=signum):
                     path = root / f'{signum}.csv'
@@ -38,7 +42,8 @@ class Shutdown(unittest.TestCase):
                                                 '--config', str(config), '--record', str(path)],
                                                stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
                                                env={**os.environ, 'TERM': 'xterm-256color', 'RSPRO_USE_SUDO': 'no',
-                                                    'RSPRO_ROOT': tmp, 'RSPRO_SIGROK_BIN': str(fixture)})
+                                                    'RSPRO_ROOT': tmp, 'RSPRO_SIGROK_BIN': str(fixture),
+                                                    'RSPRO_BTMGMT_BIN': str(btmgmt)})
                     try:
                         deadline = time.monotonic() + 4
                         while time.monotonic() < deadline:

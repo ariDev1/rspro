@@ -36,6 +36,32 @@ def cached_meters(binary, env):
     return found
 
 
+def adapter_supports_le(binary, env=None, timeout=5):
+    """Report whether any Bluetooth adapter can do Bluetooth Low Energy (BLE).
+
+    ``btmgmt info`` lists each controller's ``supported settings``; BLE-capable
+    adapters include the ``le`` token, while Bluetooth 2.x/3.0 controllers list
+    only ``br/edr``. Returns True or False when the capability is known, and
+    None when it cannot be determined (missing tool, no controller, or an
+    unreadable management interface), so callers can warn without blocking.
+    """
+    if not binary:
+        return None
+    try:
+        result = subprocess.run([binary, 'info'], env=env, stdin=subprocess.DEVNULL,
+                                capture_output=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    controllers = [line.split('supported settings:', 1)[1].split()
+                   for line in result.stdout.decode('utf-8', 'replace').splitlines()
+                   if 'supported settings:' in line]
+    if not controllers:
+        return None
+    return any('le' in settings for settings in controllers)
+
+
 class Discovery(threading.Thread):
     """Own a BlueZ discovery client and publish matching advertisements live."""
     def __init__(self, binary, env, scan_duration=8, retry_delay=2):

@@ -33,6 +33,8 @@ rspro dashboard
 
 **No address configuration is required.** The dashboard uses BlueZ's known S3 devices and automatically scans for `RS PRO S3` and `APPA S3` advertisements. It repeats eight-second discovery rounds with two-second pauses, and adds meters as soon as their advertisement arrives. You can switch on more meters while the dashboard is running; they appear and begin capture without a restart. Other Bluetooth devices are ignored. Each automatically added meter gets its advertised name and address suffix as a label, for example `RS PRO S3 · 4D:E3`.
 
+Before opening, rspro checks that the computer's Bluetooth adapter supports Bluetooth Low Energy (BLE). RS PRO S3 and APPA S3 meters are BLE devices, so a Bluetooth 2.x/3.0 adapter cannot discover them. When the adapter clearly lacks BLE, rspro stops with an actionable message instead of opening a dashboard that will never find a meter. The check reads the adapter capability from `btmgmt info`; it does not block when the capability cannot be determined.
+
 ### Update an existing installation
 
 From your repository checkout:
@@ -82,7 +84,7 @@ rspro dashboard --configured-only
 rspro dashboard --help
 ```
 
-The optional default file respects `XDG_CONFIG_HOME`; `RSPRO_CONFIG` can override it. An explicitly supplied `--config` path must exist and be valid. `RSPRO_BLUETOOTH_BIN` can override the `bluetoothctl` executable for diagnostics. Running `./rspro dashboard` directly from the repository works before installation.
+The optional default file respects `XDG_CONFIG_HOME`; `RSPRO_CONFIG` can override it. An explicitly supplied `--config` path must exist and be valid. `RSPRO_BLUETOOTH_BIN` can override the `bluetoothctl` executable for diagnostics, and `RSPRO_BTMGMT_BIN` can override the `btmgmt` executable used for the Bluetooth Low Energy check. Running `./rspro dashboard` directly from the repository works before installation.
 
 Python 3.11 or newer with standard `curses`, coreutils `stdbuf`, and `bluetoothctl` from `bluez-utils` are required. No third-party Python packages are needed. Discovery uses your user's BlueZ access. In `RSPRO_USE_SUDO=auto`, startup probes the first already-known meter for up to six seconds and authenticates sudo before curses if necessary. With no known meters it begins discovery and capture as the normal user. If your machine requires privileged capture, use `RSPRO_USE_SUDO=yes rspro dashboard`; authentication happens once before the table opens. `no` forces user-only capture. Collectors never prompt inside curses. If sudo credentials expire during reconnect, exit and restart to authenticate again.
 
@@ -174,6 +176,7 @@ When installing to a custom root, use the same `RSPRO_ROOT` when running the CLI
 
 - If the local library is missing, run the installer. A system libsigrok alone does not provide this patched setup.
 - If discovery fails, check the address, meter Bluetooth mode, adapter state, and whether another client is connected. Auto sudo fallback can also occur for these failures; it does not prove a permissions problem. Use `RSPRO_USE_SUDO=no` to diagnose without escalation, or `yes` where raw Bluetooth access requires root.
+- If rspro reports that the adapter does not support Bluetooth Low Energy, the built-in Bluetooth is too old. Bluetooth 2.x/3.0 adapters (common on older laptops) cannot reach these meters; use a Bluetooth 4.0 or newer USB adapter and confirm BlueZ selects it.
 - If the meter is detected as `APPA N/A` or capture immediately stops, see the [bug investigation](s3-timing-bug.md).
 - If the original single-meter command works but an older dashboard repeatedly reconnects without readings, update with `./install_rspro_cli.sh --cli-only`. The [dashboard stdin fix](dashboard-stdin-bug.md) keeps capture input open so sigrok does not stop on EOF.
 - For verbose diagnostics, use the installed library explicitly:
@@ -205,6 +208,6 @@ python3 -m unittest discover -s tests -v
 bash -n rspro install_rspro_cli.sh
 ```
 
-See [CI setup and matching local checks](ci.md). Tests exercise argument validation, output filtering, raw output, error propagation, configuration validation, automatic discovery and adding meters during capture, CSV recording and failure handling, SI prefix normalization, bounded trends, unit-aware alerts, concurrent collection/retry/cleanup, curses scrolling and resizing through a pseudo-terminal, and isolated CLI-only installation. CLI tests use a stand-in for sigrok, so they do not require Bluetooth hardware. A real installation verifies library loading and the `appa-dmm` driver without connecting to a meter. Hardware capture must be checked separately on the target machine.
+See [CI setup and matching local checks](ci.md). Tests exercise argument validation, output filtering, raw output, error propagation, configuration validation, the Bluetooth Low Energy preflight, automatic discovery and adding meters during capture, CSV recording and failure handling, SI prefix normalization, bounded trends, unit-aware alerts, concurrent collection/retry/cleanup, curses scrolling and resizing through a pseudo-terminal, and isolated CLI-only installation. CLI tests use a stand-in for sigrok, so they do not require Bluetooth hardware. A real installation verifies library loading and the `appa-dmm` driver without connecting to a meter. Hardware capture must be checked separately on the target machine.
 
 The wrapper and installer use the repository MIT license. The patch modifies GPL-3.0-or-later libsigrok code and is provided under GPL-3.0-or-later; libsigrok retains its upstream license.

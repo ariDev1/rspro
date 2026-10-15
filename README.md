@@ -7,7 +7,7 @@ rspro finds your meters automatically and shows their live readings, connection 
 ## What you need
 
 - An **RS PRO S3** or **APPA S3** multimeter with Bluetooth enabled. Other models are not currently supported by automatic discovery.
-- A computer running **Omarchy (Arch Linux)** with Bluetooth.
+- A computer running **Omarchy (Arch Linux)** with a Bluetooth adapter that supports Bluetooth Low Energy (a Bluetooth 4.0 or newer adapter).
 - An internet connection for installation.
 
 The number of meters you can use at once depends on your computer's Bluetooth adapter. You do not need to enter meter addresses to use the dashboard.
@@ -126,6 +126,8 @@ git pull --ff-only
 Then start `rspro dashboard` again. Your saved meter names are preserved.
 
 ## If something does not work
+
+**rspro says the adapter does not support Bluetooth Low Energy:** The computer's built-in Bluetooth is too old for these meters. Bluetooth 2.x/3.0 adapters cannot find them. Plug in a Bluetooth 4.0 or newer USB adapter and make sure it is the adapter BlueZ uses.
 
 **No meters appear:** Check that Bluetooth is on for both the computer and the meters. Close any phone app connected to them, wait for discovery, and check the message at the bottom of the dashboard.
 
